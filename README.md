@@ -1,4 +1,8 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# AvenFurniture
+
+A premium, responsive furniture storefront and local-first product CRUD demonstration built with Next.js, React, TypeScript, and Tailwind CSS.
+
+This project is ready to deploy on Vercel without environment variables or backend configuration.
 
 ## Getting Started
 

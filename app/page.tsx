@@ -1,69 +1,25 @@
+"use client";
+
 import Image from "next/image";
+import Link from "next/link";
+import { useState } from "react";
+import { ProductGrid } from "@/components/product/product-card";
+import { useStore } from "@/components/store/store-provider";
+import { ArrowIcon } from "@/components/ui/icons";
+import { collections } from "@/lib/data/products";
 
 export default function Home() {
-  return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
-  );
+  const { products } = useStore();
+  const [email, setEmail] = useState("");
+  const [joined, setJoined] = useState(false);
+  return <>
+    <section className="hero"><div className="hero-media"><Image src="https://images.unsplash.com/photo-1618221195710-dd6b41faaea6?auto=format&fit=crop&w=2000&q=90" alt="Warm contemporary living room furnished with natural timber and soft upholstery" fill priority sizes="100vw" /></div><div className="hero-shade" /><div className="container hero-content"><p className="hero-kicker">The Living Collection · 2026</p><h1>Rooms designed<br/>to be lived in.</h1><p>Considered furniture, tactile materials, and enduring forms for the everyday rituals that matter.</p><Link href="/collections" className="hero-cta">Explore the collection <ArrowIcon /></Link></div><div className="hero-index"><span>01</span><i/><span>03</span></div></section>
+    <section className="section intro-section"><div className="container intro-grid"><p className="section-note">Our point of view</p><h2>Furniture should hold a room together without asking for attention.</h2><div><p>We work with natural materials and skilled makers to create pieces of quiet confidence—beautiful in their proportions, generous in their use, and made to age with character.</p><Link href="/about" className="inline-link">Inside our studio <ArrowIcon/></Link></div></div></section>
+    <section className="section featured-section"><div className="container section-heading"><div><p className="section-note">Curated selection</p><h2>Objects of lasting value</h2></div><Link href="/products" className="inline-link">View all pieces <ArrowIcon/></Link></div><div className="container"><ProductGrid products={products.filter((p) => p.featured && p.status === "active").slice(0,4)} /></div></section>
+    <section className="section category-section"><div className="container"><div className="section-heading"><div><p className="section-note">Shop by room</p><h2>Made for the way you live</h2></div></div><div className="category-mosaic">{collections.slice(0,3).map((collection, index) => <Link href={`/products?collection=${collection.slug}`} className={`category-tile tile-${index+1}`} key={collection.slug}><Image src={collection.image} alt={`${collection.name} furniture collection`} fill sizes={index === 0 ? "(max-width: 768px) 100vw, 60vw" : "(max-width: 768px) 100vw, 40vw"}/><span><b>{collection.name}</b><small>{collection.description}</small></span></Link>)}</div></div></section>
+    <section className="material-story"><div className="material-copy"><p className="section-note">Material library</p><h2>Honest by nature</h2><p>Stone records time. Timber reveals its history. Linen softens with use. We choose materials for what they become, not only how they begin.</p><Link href="/about" className="hero-cta">Our materials <ArrowIcon/></Link><dl><div><dt>European oak</dt><dd>FSC-certified</dd></div><div><dt>Natural stone</dt><dd>Individually selected</dd></div><div><dt>Performance linen</dt><dd>Low-impact woven</dd></div></dl></div><div className="material-image"><Image src="https://images.unsplash.com/photo-1600566753190-17f0baa2a6c3?auto=format&fit=crop&w=1400&q=85" alt="Close detail of natural timber furniture and textured wall" fill sizes="(max-width: 768px) 100vw, 55vw"/></div></section>
+    <section className="section editorial-section"><div className="container editorial-grid"><div className="editorial-image"><Image src="https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&w=1400&q=85" alt="Layered neutral living interior" fill sizes="(max-width: 768px) 100vw, 55vw"/></div><div className="editorial-copy"><p className="section-note">The Aven journal</p><h2>A quieter kind of luxury</h2><p>Designer Mai Le invites us into a city home where restraint, material warmth, and the afternoon light do the talking.</p><Link href="/inspiration" className="inline-link">Read the story <ArrowIcon/></Link></div></div></section>
+    <section className="section new-section"><div className="container section-heading"><div><p className="section-note">Just arrived</p><h2>New studies in form</h2></div></div><div className="container"><ProductGrid products={products.filter((p) => p.status === "active").slice(8,12)} /></div></section>
+    <section className="newsletter"><div><p className="section-note">Notes from the studio</p><h2>Ideas for thoughtful interiors, delivered occasionally.</h2></div>{joined ? <p className="newsletter-success" role="status">You’re on the list. Welcome to AvenFurniture.</p> : <form onSubmit={(e) => { e.preventDefault(); if (email) setJoined(true); }}><label htmlFor="newsletter-email">Email address</label><div><input id="newsletter-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" required/><button type="submit">Join the journal <ArrowIcon/></button></div></form>}</section>
+  </>;
 }
