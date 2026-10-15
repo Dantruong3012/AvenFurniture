@@ -1,4 +1,6 @@
 import type { NextConfig } from "next";
+import { PHASE_PRODUCTION_BUILD } from "next/constants";
+import { getSupabaseConfig } from "./lib/supabase/config";
 
 const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
 
@@ -24,4 +26,9 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+export default function config(phase: string): NextConfig {
+  // Dynamic routes may never execute during build. Validate before bundling so
+  // missing public env cannot produce a READY deployment that fails on request.
+  if (phase === PHASE_PRODUCTION_BUILD) getSupabaseConfig();
+  return nextConfig;
+}
