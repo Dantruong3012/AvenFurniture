@@ -1,0 +1,13 @@
+{
+  "status": "native-jwt-and-rotation-verified-application-session-limit",
+  "project_ref": "eofdtqnnqgxaoykcbfrv",
+  "jwt_lifetime_seconds": 900,
+  "session_max_age_seconds": 604800,
+  "inactivity_timeout_enabled": false,
+  "single_session_per_user": false,
+  "refresh_token_rotation_enabled": true,
+  "refresh_token_reuse_interval_seconds": 10,
+  "public_signup_enabled": false,
+  "requires_plan_verification": "Free confirmed by owner; native paid timebox not enabled",
+  "note": "JWT 900s, rotation/reuse 10s verified via Management API and live Auth. Seven-day authorization enforced by SQL/SSR, not native refresh expiration."
+}

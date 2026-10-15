@@ -1,40 +1,27 @@
 # AvenFurniture
 
-A premium, responsive furniture storefront and local-first product CRUD demonstration built with Next.js, React, TypeScript, and Tailwind CSS.
+A furniture inquiry storefront built with Next.js 16, React, TypeScript, Supabase, and Cloudinary.
 
-This project is ready to deploy on Vercel without environment variables or backend configuration.
+The storefront currently uses demo catalog data. Admin category/product management uses real Supabase data with SSR authentication and RLS. JWT 900 seconds, disabled public signup and rotation remain unchanged from Phase 0. See the [Phase 1 catalog report](src/docs/12-phase1-catalog.md) for features, access, migrations and test evidence. This is not a production-ready release.
 
-## Getting Started
+## Local development
 
-First, run the development server:
+Install dependencies with `npm ci`, then run `npm run dev` and open [localhost:3000](http://localhost:3000).
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+Configure the variable names listed in `.env.example` in your existing `.env.local`. Preserve the Cloudinary values already there. Admin routes require the Supabase URL/publishable key; do not commit `.env.local` or use secret keys in browser code.
+
+See the [MVP plan](src/docs/07-mvp-plan.md) and [Supabase integration status, migration review, and Auth setup](src/docs/08-supabase-integration.md). The initial migrations were explicitly approved and applied on 14 October 2026. Admin access requires an explicitly provisioned active profile; there is no public admin registration.
+
+## Validation
+
+```sh
+npm run lint
+npx tsc --noEmit
+npm test
+npm run build
+npm run check:supabase
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Database tests use isolated in-memory PostgreSQL and do not touch Supabase production. The connection check reads remote Auth settings and prints only safe status fields. See [session security status](src/docs/09-session-security.md) for live checks and remaining Auth setup.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+See the [Phase 0 acceptance report](src/docs/11-phase0-acceptance.md) for verified results, remaining manual checks and deferred email delivery.

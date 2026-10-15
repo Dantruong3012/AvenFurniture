@@ -1,41 +1,17 @@
-"use client";
-
-import { useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { ProductGrid } from "@/components/product/product-card";
-import { useStore } from "@/components/store/store-provider";
-import { Button } from "@/components/ui/button";
-import { CloseIcon, FilterIcon, SearchIcon } from "@/components/ui/icons";
+import type { CatalogFilters, CatalogProduct } from "@/lib/catalog/public";
 
-const categories = ["Sofas","Lounge Chairs","Dining Chairs","Dining Tables","Coffee Tables","Beds","Cabinets","Shelving","Lighting","Accessories"];
-const materials = ["All","Oak","Walnut","Linen","Wool","Stone","Steel"];
-
-export function CatalogClient() {
-  const params = useSearchParams();
-  const initialCollection = params.get("collection")?.replaceAll("-", " ") ?? "";
-  const { products } = useStore();
-  const [search, setSearch] = useState("");
-  const [category, setCategory] = useState("All");
-  const [material, setMaterial] = useState("All");
-  const [availability, setAvailability] = useState("all");
-  const [maxPrice, setMaxPrice] = useState(7000);
-  const [sort, setSort] = useState("featured");
-  const [filtersOpen, setFiltersOpen] = useState(false);
-  const filtered = useMemo(() => {
-    const result = products.filter((p) => p.status === "active" && (!initialCollection || p.collection.toLowerCase() === initialCollection) && (category === "All" || p.category === category) && (material === "All" || p.material.toLowerCase().includes(material.toLowerCase())) && (availability === "all" || p.stock > 0) && p.price <= maxPrice && `${p.name} ${p.description}`.toLowerCase().includes(search.toLowerCase()));
-    return [...result].sort((a,b) => sort === "price-low" ? a.price-b.price : sort === "price-high" ? b.price-a.price : sort === "name" ? a.name.localeCompare(b.name) : Number(b.featured)-Number(a.featured));
-  }, [products, initialCollection, category, material, availability, maxPrice, search, sort]);
-  const clear = () => { setCategory("All"); setMaterial("All"); setAvailability("all"); setMaxPrice(7000); setSearch(""); };
-  const filterBody = <>
-    <fieldset className="filter-group"><legend>Category</legend>{["All",...categories].map((item) => <label key={item}><input type="radio" name="category" value={item} checked={category===item} onChange={() => setCategory(item)}/><span>{item}</span></label>)}</fieldset>
-    <fieldset className="filter-group"><legend>Material</legend><select value={material} onChange={(e)=>setMaterial(e.target.value)}>{materials.map((m)=><option key={m}>{m}</option>)}</select></fieldset>
-    <fieldset className="filter-group"><legend>Price up to <span>${maxPrice.toLocaleString()}</span></legend><input type="range" min="500" max="7000" step="250" value={maxPrice} onChange={(e)=>setMaxPrice(Number(e.target.value))}/></fieldset>
-    <fieldset className="filter-group"><legend>Availability</legend><label><input type="checkbox" checked={availability==="stock"} onChange={(e)=>setAvailability(e.target.checked?"stock":"all")}/><span>In stock</span></label></fieldset>
-    <Button variant="text" onClick={clear}>Clear all filters</Button>
-  </>;
-  return <div className="container catalog-shell">
-    <div className="catalog-toolbar"><label className="catalog-search"><SearchIcon/><span className="sr-only">Search products</span><input value={search} onChange={(e)=>setSearch(e.target.value)} placeholder="Search by name or style"/></label><div className="catalog-controls"><button className="filter-trigger" onClick={()=>setFiltersOpen(true)}><FilterIcon/> Filters</button><label>Sort <select value={sort} onChange={(e)=>setSort(e.target.value)}><option value="featured">Featured</option><option value="price-low">Price: low to high</option><option value="price-high">Price: high to low</option><option value="name">Name</option></select></label></div></div>
-    <div className="catalog-layout"><aside className="filter-sidebar" aria-label="Product filters">{filterBody}</aside><section className="catalog-results"><p className="result-count">{filtered.length} {filtered.length===1?"piece":"pieces"}</p>{filtered.length ? <ProductGrid products={filtered}/> : <div className="empty-state"><h2>No pieces found</h2><p>Try widening your price range or clearing the current filters.</p><Button onClick={clear}>Clear filters</Button></div>}</section></div>
-    <div className={`drawer-scrim ${filtersOpen?"open":""}`} onClick={()=>setFiltersOpen(false)}/><aside className={`filter-drawer ${filtersOpen?"open":""}`} aria-hidden={!filtersOpen}><div className="drawer-head"><h2>Filters</h2><button className="icon-button" onClick={()=>setFiltersOpen(false)} aria-label="Close filters"><CloseIcon/></button></div><div className="drawer-body">{filterBody}</div><Button onClick={()=>setFiltersOpen(false)}>Show {filtered.length} pieces</Button></aside>
+export function CatalogClient({ products, count, filters, categories }: { products: CatalogProduct[]; count: number; filters: CatalogFilters; categories: { id: string; name: string; slug: string }[] }) {
+  const pageHref = (page: number) => { const params = new URLSearchParams({ q: filters.q, category: filters.category, material: filters.material, price: filters.price, sort: filters.sort, page: String(page) }); return `/products?${params}`; };
+  return <div className="container catalog-shell"><form action="/products" className="public-catalog-form">
+    <label>Search products<input type="search" name="q" defaultValue={filters.q} maxLength={100} placeholder="Search by name"/></label>
+    <label>Category<select name="category" defaultValue={filters.category}><option value="">All categories</option>{categories.map((category) => <option value={category.slug} key={category.id}>{category.name}</option>)}</select></label>
+    <label>Material<input name="material" defaultValue={filters.material} maxLength={80} placeholder="e.g. oak"/></label>
+    <label>Price<select name="price" defaultValue={filters.price}><option value="all">All prices</option><option value="quote">Request a quote</option><option value="priced">Priced products</option><option value="under-1000">USD under $1,000</option><option value="1000-3000">USD $1,000–$3,000</option><option value="over-3000">USD over $3,000</option></select></label>
+    <label>Sort<select name="sort" defaultValue={filters.sort}><option value="featured">Featured</option><option value="newest">Newest</option><option value="name">Name A–Z</option><option value="price-low">Price: low to high by currency</option><option value="price-high">Price: high to low by currency</option></select></label>
+    <button className="btn btn-primary">Apply</button><Link href="/products" className="text-link">Clear</Link>
+  </form><section className="catalog-results"><p className="result-count">{count} {count === 1 ? "piece" : "pieces"}</p>{products.length ? <ProductGrid products={products}/> : <div className="empty-state"><h2>No pieces found</h2><p>{count === 0 && !filters.q && !filters.category && !filters.material && filters.price === "all" ? "Our catalog is being prepared. Please check back soon." : "Try another search or clear the filters."}</p><Link className="btn btn-secondary" href="/products">Clear filters</Link></div>}</section>
+    <nav className="catalog-pagination" aria-label="Catalog pages">{filters.page > 1 && <Link href={pageHref(filters.page - 1)}>Previous</Link>}<span>Page {filters.page} of {Math.max(1, Math.ceil(count / 24))}</span>{filters.page * 24 < count && <Link href={pageHref(filters.page + 1)}>Next</Link>}</nav>
   </div>;
 }

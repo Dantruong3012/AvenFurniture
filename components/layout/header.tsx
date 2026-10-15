@@ -29,6 +29,7 @@ export function Header() {
         </Link>
         <nav className="desktop-nav" aria-label="Primary navigation">
           {links.map(([label, href]) => <Link key={href} href={href} className={pathname === href ? "active" : ""}>{label}</Link>)}
+          <Link href="/admin" className={pathname.startsWith("/admin") ? "active" : ""}>Admin</Link>
         </nav>
         <div className="header-actions">
           <Link href="/products" className="icon-button desktop-only" aria-label="Search products"><SearchIcon /></Link>
@@ -41,7 +42,7 @@ export function Header() {
     <aside className={`mobile-nav ${open ? "open" : ""}`} aria-hidden={!open} aria-label="Mobile navigation">
       <div className="mobile-nav-top"><span>Menu</span><button className="icon-button" onClick={() => setOpen(false)} aria-label="Close navigation"><CloseIcon /></button></div>
       <nav>{links.map(([label, href]) => <Link key={href} href={href} onClick={() => setOpen(false)}>{label}</Link>)}</nav>
-      <div className="mobile-nav-meta"><Link href="/wishlist">Wishlist ({wishlist.length})</Link><Link href="/admin">Demo Admin</Link><p>Complimentary delivery on orders over $2,500.</p></div>
+      <div className="mobile-nav-meta"><Link href="/wishlist">Wishlist ({wishlist.length})</Link><Link href="/admin" onClick={() => setOpen(false)}>Admin</Link></div>
     </aside>
   </>;
 }

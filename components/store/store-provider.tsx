@@ -1,84 +1,43 @@
 "use client";
-
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
-import { LocalProductRepository } from "@/lib/repositories/productRepository";
-import { seedProducts } from "@/lib/data/products";
-import type { CartItem, Product } from "@/lib/types";
+import type { CartItem } from "@/lib/types";
 
 interface StoreContextValue {
-  products: Product[];
-  cart: CartItem[];
-  wishlist: string[];
-  hydrated: boolean;
+  cart: CartItem[]; wishlist: string[]; hydrated: boolean;
   addToCart: (productId: string, quantity?: number) => void;
   updateQuantity: (productId: string, quantity: number) => void;
   removeFromCart: (productId: string) => void;
   clearCart: () => void;
   toggleWishlist: (productId: string) => void;
-  upsertProduct: (product: Product) => void;
-  deleteProduct: (productId: string) => void;
-  resetProducts: () => void;
 }
-
 const StoreContext = createContext<StoreContextValue | null>(null);
-const repository = new LocalProductRepository();
 const CART_KEY = "aven-furniture-cart-v1";
 const WISHLIST_KEY = "aven-furniture-wishlist-v1";
-
-function readStored<T>(key: string, fallback: T): T {
-  try {
-    const value = window.localStorage.getItem(key);
-    return value ? JSON.parse(value) as T : fallback;
-  } catch { return fallback; }
-}
+const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+function readStored(key: string): unknown { try { return JSON.parse(localStorage.getItem(key) || "null"); } catch { return null; } }
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {
-  const [products, setProducts] = useState<Product[]>(seedProducts);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [wishlist, setWishlist] = useState<string[]>([]);
   const [hydrated, setHydrated] = useState(false);
-
   useEffect(() => {
-    /* Client persistence is intentionally restored only after the server-safe seed render. */
+    const storedCart = readStored(CART_KEY);
+    const storedWishlist = readStored(WISHLIST_KEY);
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setProducts(repository.list());
-    setCart(readStored(CART_KEY, []));
-    setWishlist(readStored(WISHLIST_KEY, []));
+    setCart(Array.isArray(storedCart) ? storedCart.filter((item) => item && typeof item.productId === "string" && uuid.test(item.productId) && Number.isSafeInteger(item.quantity) && item.quantity > 0 && item.quantity <= 999).slice(0, 100) : []);
+    setWishlist(Array.isArray(storedWishlist) ? [...new Set(storedWishlist.filter((id) => typeof id === "string" && uuid.test(id)))].slice(0, 100) as string[] : []);
+    localStorage.removeItem("aven-furniture-products-v1");
     setHydrated(true);
   }, []);
-
-  useEffect(() => { if (hydrated) window.localStorage.setItem(CART_KEY, JSON.stringify(cart)); }, [cart, hydrated]);
-  useEffect(() => { if (hydrated) window.localStorage.setItem(WISHLIST_KEY, JSON.stringify(wishlist)); }, [wishlist, hydrated]);
-
-  const value = useMemo<StoreContextValue>(() => ({
-    products,
-    cart,
-    wishlist,
-    hydrated,
-    addToCart(productId, quantity = 1) {
-      setCart((items) => items.some((item) => item.productId === productId)
-        ? items.map((item) => item.productId === productId ? { ...item, quantity: item.quantity + quantity } : item)
-        : [...items, { productId, quantity }]);
-    },
-    updateQuantity(productId, quantity) { setCart((items) => quantity < 1 ? items.filter((item) => item.productId !== productId) : items.map((item) => item.productId === productId ? { ...item, quantity } : item)); },
+  useEffect(() => { if (hydrated) localStorage.setItem(CART_KEY, JSON.stringify(cart)); }, [cart, hydrated]);
+  useEffect(() => { if (hydrated) localStorage.setItem(WISHLIST_KEY, JSON.stringify(wishlist)); }, [wishlist, hydrated]);
+  const value = useMemo<StoreContextValue>(() => ({ cart, wishlist, hydrated,
+    addToCart(productId, quantity = 1) { if (!uuid.test(productId)) return; setCart((items) => items.some((item) => item.productId === productId) ? items.map((item) => item.productId === productId ? { ...item, quantity: Math.min(999, item.quantity + quantity) } : item) : [...items, { productId, quantity: Math.min(999, Math.max(1, quantity)) }].slice(0, 100)); },
+    updateQuantity(productId, quantity) { setCart((items) => quantity < 1 ? items.filter((item) => item.productId !== productId) : items.map((item) => item.productId === productId ? { ...item, quantity: Math.min(999, quantity) } : item)); },
     removeFromCart(productId) { setCart((items) => items.filter((item) => item.productId !== productId)); },
     clearCart() { setCart([]); },
-    toggleWishlist(productId) { setWishlist((items) => items.includes(productId) ? items.filter((id) => id !== productId) : [...items, productId]); },
-    upsertProduct(product) {
-      setProducts((items) => {
-        const next = items.some((item) => item.id === product.id) ? items.map((item) => item.id === product.id ? product : item) : [product, ...items];
-        repository.save(next); return next;
-      });
-    },
-    deleteProduct(productId) { setProducts((items) => { const next = items.filter((item) => item.id !== productId); repository.save(next); return next; }); },
-    resetProducts() { const next = repository.reset(); setProducts(next); },
-  }), [products, cart, wishlist, hydrated]);
-
+    toggleWishlist(productId) { if (!uuid.test(productId)) return; setWishlist((items) => items.includes(productId) ? items.filter((id) => id !== productId) : [...items, productId].slice(0, 100)); },
+  }), [cart, wishlist, hydrated]);
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
 }
-
-export function useStore() {
-  const context = useContext(StoreContext);
-  if (!context) throw new Error("useStore must be used within StoreProvider");
-  return context;
-}
+export function useStore() { const value = useContext(StoreContext); if (!value) throw new Error("useStore must be used within StoreProvider"); return value; }
