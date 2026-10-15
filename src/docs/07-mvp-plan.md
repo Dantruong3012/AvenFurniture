@@ -78,6 +78,6 @@ Người phụ trách inquiry dùng để phối hợp, không giới hạn quy�
 
 - Giữ ngôn ngữ/tiền tệ hiện tại cho đến khi có quyết định chuyển; không tự đổi toàn site sang tiếng Việt/VND.
 - Không bổ sung CRUD bộ sưu tập, blog CMS, realtime, thanh toán, CRM hoặc chat trong MVP.
-- Cloudinary đã lưu cấu hình local, chưa tích hợp hoặc xác minh upload. Supabase MCP/API và URL/publishable key local đã kiểm chứng; migration remote đang chờ duyệt, Auth setup và email vẫn cần hoàn thiện. Xem [trạng thái tích hợp](./08-supabase-integration.md).
+- Cloudinary upload và storefront đã nghiệm thu tích hợp tại Phase 2; migration remote version `20261015085103` đã áp dụng. Email/domain/SMTP và các bước phát hành còn chờ. Xem [báo cáo Phase 2](./13-phase2-media-storefront.md).
 - Secret đã chia sẻ trong chat phải thay trước production; không chép giá trị vào tài liệu. Xem [hướng dẫn cấu hình/deploy](./06-production.md).
 - Chưa đủ dịch vụ vẫn làm UI, migrations và kiểm thử local; không đánh dấu mock là tích hợp hoàn thành hoặc fallback mock trong production.

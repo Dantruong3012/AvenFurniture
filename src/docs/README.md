@@ -1,6 +1,6 @@
 # Kế hoạch triển khai AvenFurniture
 
-Cập nhật: 14/10/2026. Chủ project đã nghiệm thu Phase 0 đủ để bắt đầu Feature Development. Phạm vi Phase 1 là Category & Product Management; xem báo cáo 12 cho trạng thái hiện tại. Các roadmap cũ là kế hoạch MVP tổng thể, không thay thế phạm vi Phase 1 mới.
+Cập nhật: 15/10/2026. Phase 0 đủ để bắt đầu Feature Development; Phase 1 quản lý catalog và Phase 2 Cloudinary/storefront đã nghiệm thu tích hợp. Xem báo cáo 12–13 cho trạng thái hiện tại. Các roadmap cũ là kế hoạch MVP tổng thể.
 
 ## Mục tiêu
 
@@ -25,7 +25,7 @@ SEO, accessibility, validation và responsive phải được áp dụng xuyên 
 
 ## Các nguyên tắc bắt buộc
 
-- Cloudinary đã có cấu hình local; code upload/storefront Phase 2 đã triển khai nhưng migration remote đang chờ duyệt. Supabase schema/Auth và admin catalog Phase 1 đã tích hợp; email/domain/SMTP được hoãn theo yêu cầu chủ project. Trạng thái mới nhất ở tài liệu 13.
+- Cloudinary upload/storefront Phase 2 đã nghiệm thu trên dịch vụ thật; migration remote version `20261015085103` đã áp dụng. Supabase schema/Auth và admin catalog Phase 1 đã tích hợp; email/domain/SMTP được hoãn theo yêu cầu chủ project. Trạng thái mới nhất ở tài liệu 13.
 - Không coi mock là tích hợp thật; production không được tự chuyển sang mock khi thiếu cấu hình.
 - Inquiry chỉ báo tiếp nhận thành công sau khi lưu bền vững; gửi email lỗi không làm mất inquiry.
 - Kiểm tra quyền trên server và ở database; không dựa vào việc ẩn nút trên giao diện.

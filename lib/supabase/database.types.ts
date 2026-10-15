@@ -393,7 +393,15 @@ export type Database = {
           uploaded_by?: string | null
           width?: number
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "media_assets_uploaded_by_fkey"
+            columns: ["uploaded_by"]
+            isOneToOne: false
+            referencedRelation: "admin_profiles"
+            referencedColumns: ["user_id"]
+          },
+        ]
       }
       product_images: {
         Row: {

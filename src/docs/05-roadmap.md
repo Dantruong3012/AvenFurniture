@@ -93,7 +93,7 @@ Nghiệm thu: toàn bộ checklist production đạt; không còn thiếu cấu 
 
 ## Cấu hình dịch vụ và việc làm trong lúc chờ
 
-Cloudinary đã có cấu hình local nhưng chưa kiểm chứng tích hợp; thay secret trước production. Supabase MCP/API và URL/publishable key local đã kiểm chứng; migration remote đang chờ duyệt. Auth settings, bootstrap và email vẫn cần cấu hình. Có thể tiếp tục migrations/RLS, giao diện, validation, adapters, test local, email preview, SEO và responsive. Không đánh dấu upload/email/Auth cloud đã hoàn thành khi chỉ chạy mock. Khi có key: cấu hình staging → chạy migrations → bootstrap admin → kiểm thử tích hợp → nghiệm thu → triển khai production.
+Cloudinary media và storefront Phase 2 đã nghiệm thu tích hợp; migration remote version `20261015085103` đã áp dụng. Thay Cloudinary secret trước production. Email/domain/SMTP vẫn hoãn; MFA vận hành và các bước staging/production còn chờ. Bước chức năng tiếp theo theo MVP là inquiry, sau đó tư vấn viên Zalo. Xem [báo cáo Phase 2](./13-phase2-media-storefront.md).
 
 ## P2 — Sau khi vận hành ổn định
 

@@ -1,4 +1,4 @@
--- REVIEW REQUIRED. Additive Phase 2 migration; do not apply to remote until approved.
+-- Applied to project eofdtqnnqgxaoykcbfrv as version 20261015085103.
 -- Existing assets remain ready; bytes and uploaded_by are nullable for legacy rows.
 alter table public.media_assets
   add column bytes bigint check (bytes between 1 and 10485760),
