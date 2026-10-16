@@ -1,8 +1,9 @@
 # Implementation: orchestrator-autopilot-setup
 
-Status: READY_FOR_REVIEW
+Status: DONE
 Implementer: Codex
 Date: 2026-10-16
+Implementation commit: da9290b
 
 ## Implemented
 
@@ -25,4 +26,4 @@ The model-driven subprocess environment strips management credentials; logs reda
 
 ## Review boundaries
 
-Antigravity must review the exact setup diff and record an actual `APPROVED` or `CHANGES_REQUESTED` decision in `REVIEW.md`. No setup commit, push, backlog run, Production migration or deploy has occurred. A setup commit may be made only after `APPROVED`, staging exactly its reviewed files and excluding the blocked admin metadata. The actual admin checkpoint still needs a separately reviewed recovery using the user's chosen existing statuses (`new`, `consulting`, `completed`, `cancelled`). M2–M8 release milestones remain pending; a successful launcher smoke does not imply the whole release system is complete.
+Antigravity reviewed the exact setup diff and recorded an actual `APPROVED` decision in `REVIEW.md`. Commit `da9290b` contains the reviewed setup files and lifecycle artifacts; the blocked admin metadata was excluded. No push, backlog run, Production migration or deploy has occurred. The actual admin checkpoint still needs a separately reviewed recovery using the user's chosen existing statuses (`new`, `consulting`, `completed`, `cancelled`). M2–M8 release milestones remain pending; a successful launcher smoke does not imply the whole release system is complete.
