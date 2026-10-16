@@ -1,12 +1,12 @@
 # Implementation: orchestrator-release-m1
 
-Status: READY_FOR_REVIEW
+Status: COMMITTED
 Implementer: Codex
 Date: 2026-10-16
 
 ## Scope and architecture
 
-User-authorized release infrastructure upgrade, milestone M1 only. The proposal and M1–M8 acceptance criteria are in `.ai-collab/release/DESIGN.md`; infrastructure findings are in `AUDIT.md` and operating instructions in `OPERATIONS.md`. Antigravity has not yet approved this implementation. M2–M8 are not implemented, and this is not end-to-end CI/CD readiness.
+User-authorized release infrastructure upgrade, milestone M1 only. The proposal and M1–M8 acceptance criteria are in `.ai-collab/release/DESIGN.md`; infrastructure findings are in `AUDIT.md` and operating instructions in `OPERATIONS.md`. Antigravity approved the final M1 delta through the real CLI; see REVIEW.md and its hash-bound receipt. M2–M8 are not implemented, and this is not end-to-end CI/CD readiness.
 
 M1 archives immutable completion checkpoints, validates real coordinator review/commit/check receipts and Git trees, scans outgoing historical blobs, detects remote divergence, pushes an exact dev SHA, and independently verifies remote SHA. Repeated or interrupted pushes reconcile external state. Separate release state/events preserve development DONE on release failure. The existing shared lock retains unresolved network-operation markers after a crash/timeout. Defaults: disabled, manual. No actual GitHub push, PR, merge or deployment performed.
 
@@ -47,3 +47,11 @@ Operator confirms one shared project for Local/Preview/Production. Keep it. Live
 ## Review handoff and activation blockers
 
 Review receipt/tree validation, push identity/history/secret guards, interruption behavior, legacy coordinator regressions and shared-database safety. Review only these M1 paths; do not approve unrelated admin artifacts. Require actual Antigravity APPROVED before any commit. Do not expand runner upgrade allowlists or resume the blocked admin task to activate this work. Resolve its architecture and runner adoption separately or use a clean dedicated checkout. Missing GitHub API authentication/protection/CI and Vercel team access remain infrastructure prerequisites for later milestones.
+
+## Post-review local commit record
+
+Implementation commit: `1b17110d26309a8a0ba47caae0de869a2dff81bc`
+Branch: `dev/aven-release-m1`
+Isolated worktree: `/private/tmp/aven-release-m1`
+
+Only the reviewed M1 code/docs and actual review artifact were committed. This metadata update records that commit; it does not change reviewed runner code. No push. The main checkout stays on `dev/aven-autonomous-backlog` at faab317 with its original dirty task metadata and BLOCKED checkpoint. Its BACKLOG.md and STATE.md were not staged, committed or updated by M1. M1 is not integrated into that checkpoint baseline; resolve the admin plan and separately reviewed runner adoption before activating. No overall release DONE/DEPLOYED claim.
