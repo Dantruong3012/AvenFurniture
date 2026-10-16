@@ -5,11 +5,110 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { archiveCompleted, gitRunner, pushCompleted, verifyCompleted, scanOutgoing } from './release-git.mjs';
-import { afterCompleted } from './release.mjs';
+import { afterCompleted, preflightAndPush, trackPreview } from './release.mjs';
+import { createVercelClient, validateVercelConfig } from './release-vercel.mjs';
 import { acquireLock, digest, releaseLock, snapshot } from './orchestrator-core.mjs';
 
 const checks = [['node', 'verify.mjs']];
 const policy = { enabled: true, releaseMode: 'manual', repository: 'Fixture/AvenFurniture', remote: 'origin', developmentBranch: 'dev/aven-autonomous-backlog', productionBranch: 'main', timeoutMs: 5000, maxOutgoingCommits: 100 };
+const vercelPolicy = { ...policy, vercelProjectId: 'prj_fixture123', vercelTeamId: 'team_fixture123', previewTimeoutMs: 3000, previewPollIntervalMs: 100 };
+const previewSha = 'a'.repeat(40);
+const previewId = 'dpl_fixture123';
+const previewBranch = policy.developmentBranch;
+const preview = (readyState = 'READY', overrides = {}) => ({ id: previewId, projectId: vercelPolicy.vercelProjectId,
+  target: 'preview', source: 'git', readyState, meta: { githubCommitSha: previewSha, githubCommitRef: previewBranch },
+  url: 'aven-fixture.vercel.app', ...overrides });
+const apiResponse = (body, status = 200, headers = {}) => ({ ok: status >= 200 && status < 300, status,
+  headers: { get: (name) => headers[name.toLowerCase()] ?? null }, json: async () => body });
+function previewApi({ list = [preview()], detail = [preview()], projectBranch = 'main', onCall } = {}) {
+  let nowMs = 0, details = 0;
+  const requests = [];
+  const fetchImpl = async (url, options) => {
+    requests.push({ url, options });
+    onCall?.(url, options, requests.length);
+    if (url.pathname.startsWith('/v9/projects/')) return apiResponse({ id: vercelPolicy.vercelProjectId, link: { type: 'github', productionBranch: projectBranch } });
+    if (url.pathname === '/v7/deployments') return apiResponse({ deployments: list });
+    if (url.pathname.startsWith('/v13/deployments/')) return apiResponse(detail[Math.min(details++, detail.length - 1)]);
+    throw new Error('Unexpected Vercel endpoint');
+  };
+  const client = createVercelClient({ token: 'fixture-token', projectId: vercelPolicy.vercelProjectId,
+    teamId: vercelPolicy.vercelTeamId, timeoutMs: 5000, fetchImpl,
+    now: () => nowMs, sleep: async (ms) => { nowMs += ms; } });
+  return { client, requests };
+}
+test('Preview policy requires exact project and bounded polling', () => {
+  assert.equal(validateVercelConfig(vercelPolicy), vercelPolicy);
+  assert.throws(() => validateVercelConfig({ ...vercelPolicy, vercelProjectId: '' }));
+  assert.throws(() => validateVercelConfig({ ...vercelPolicy, previewTimeoutMs: Infinity }));
+});
+test('Vercel project branch and Preview identity are independently checked', async () => {
+  const f = previewApi();
+  assert.deepEqual(await f.client.verifyProjectConfiguration(), { projectId: vercelPolicy.vercelProjectId, productionBranch: 'main' });
+  assert.equal((await f.client.getDeploymentByCommit(previewSha, previewBranch)).id, previewId);
+  const listUrl = f.requests.find(({ url }) => url.pathname === '/v7/deployments').url;
+  assert.equal(listUrl.searchParams.get('sha'), previewSha);
+  assert.equal(listUrl.searchParams.get('branch'), previewBranch);
+  assert.equal(listUrl.searchParams.get('target'), 'preview');
+  assert.equal(listUrl.searchParams.get('teamId'), vercelPolicy.vercelTeamId);
+  assert.ok(f.requests.every(({ options }) => options.method === 'GET'));
+  await assert.rejects(previewApi({ projectBranch: 'dev' }).client.verifyProjectConfiguration(), /Production Branch/);
+  for (const wrong of [{ meta: { githubCommitSha: 'b'.repeat(40), githubCommitRef: previewBranch } },
+    { meta: { githubCommitSha: previewSha, githubCommitRef: 'other' } }, { target: 'production' },
+    { target: 'staging' }, { customEnvironment: { id: 'env_fixture' } }, { source: 'cli' },
+    { projectId: 'prj_other' }]) {
+    assert.equal(await previewApi({ list: [preview('READY', wrong)] }).client.getDeploymentByCommit(previewSha, previewBranch), null);
+    await assert.rejects(previewApi({ detail: [preview('READY', wrong)] }).client.waitForDeploymentReady(previewId,
+      { sha: previewSha, branch: previewBranch, timeoutMs: 3000, pollIntervalMs: 100 }), /identity changed/);
+  }
+});
+test('real Vercel Git Preview shape uses null target and uid in list; Production remains rejected', async () => {
+  const list = [preview('ERROR', { id: undefined, uid: previewId, target: null })];
+  const detail = [preview('ERROR', { target: null })];
+  const f = previewApi({ list, detail });
+  assert.equal((await f.client.getDeploymentByCommit(previewSha, previewBranch)).id, previewId);
+  await assert.rejects(f.client.waitForDeploymentReady(previewId,
+    { sha: previewSha, branch: previewBranch, timeoutMs: 3000, pollIntervalMs: 100 }), /ERROR/);
+  assert.equal(await previewApi({ list: [preview('READY', { target: 'production' })] }).client.getDeploymentByCommit(previewSha, previewBranch), null);
+});
+test('Preview polling handles READY, ERROR, CANCELED, and timeout without deployment writes', async () => {
+  const f = previewApi({ detail: [preview('BUILDING'), preview('READY')] });
+  assert.equal((await f.client.findAndWaitForPreview(previewSha, previewBranch,
+    { timeoutMs: 3000, pollIntervalMs: 100 })).stage, 'PREVIEW_READY');
+  for (const state of ['ERROR', 'CANCELED', 'BLOCKED']) {
+    await assert.rejects(previewApi({ detail: [preview(state)] }).client.waitForDeploymentReady(previewId,
+      { sha: previewSha, branch: previewBranch, timeoutMs: 3000, pollIntervalMs: 100 }), new RegExp(state));
+  }
+  await assert.rejects(previewApi({ detail: [preview('BUILDING')] }).client.waitForDeploymentReady(previewId,
+    { sha: previewSha, branch: previewBranch, timeoutMs: 1000, pollIntervalMs: 100 }), /timed out/);
+});
+test('HTTP 429 honors Retry-After and never exposes token or response body', async () => {
+  let nowMs = 0, calls = 0;
+  const fetchImpl = async () => ++calls === 1
+    ? apiResponse({ secret: 'fixture-token' }, 429, { 'retry-after': '2' })
+    : apiResponse({ id: vercelPolicy.vercelProjectId, link: { type: 'github', productionBranch: 'main' } });
+  const client = createVercelClient({ token: 'fixture-token', projectId: vercelPolicy.vercelProjectId,
+    timeoutMs: 5000, fetchImpl, now: () => nowMs, sleep: async (ms) => { nowMs += ms; } });
+  assert.equal((await client.verifyProjectConfiguration()).productionBranch, 'main');
+  assert.equal(nowMs, 2000);
+  assert.equal(calls, 2);
+  const failure = createVercelClient({ token: 'fixture-token', projectId: vercelPolicy.vercelProjectId,
+    timeoutMs: 5000, fetchImpl: async () => apiResponse({ secret: 'fixture-token' }, 403) });
+  await assert.rejects(failure.verifyProjectConfiguration(), (error) => !error.message.includes('fixture-token') && /HTTP 403/.test(error.message));
+});
+test('release Preview transition persists intent, exact READY proof, and sanitized failure', async () => {
+  const states = [];
+  const pushed = { stage: 'PUSHED', sha: previewSha, remoteSha: previewSha, task: 'fixture' };
+  const result = await trackPreview({ config: vercelPolicy, pushed, client: previewApi().client,
+    save: (state) => states.push(structuredClone(state)) });
+  assert.equal(result.stage, 'PREVIEW_READY');
+  assert.deepEqual(states.map((state) => state.stage), ['PREVIEW_DEPLOYING', 'PREVIEW_READY']);
+  await assert.rejects(trackPreview({ config: vercelPolicy, pushed, client: previewApi({ detail: [preview('ERROR')] }).client,
+    save: (state) => states.push(structuredClone(state)) }), /Preview verification failed/);
+  assert.equal(states.at(-1).stage, 'DEPLOY_FAILED');
+  assert.ok(!JSON.stringify(states).includes('fixture-token'));
+  await assert.rejects(trackPreview({ config: vercelPolicy, pushed: { ...pushed, remoteSha: 'b'.repeat(40) },
+    client: previewApi().client, save: () => {} }), /verified pushed SHA/);
+});
 test('secret scanner implementation does not trip its own outgoing scan', () => {
   const content = readFileSync(new URL('./release-git.mjs', import.meta.url), 'utf8');
   const oid = 'a'.repeat(40);
@@ -36,15 +135,15 @@ for (const scenario of ['existing-fixture', 'wrong-path', 'arbitrary-secret']) t
   if (scenario === 'existing-fixture') assert.deepEqual(scanOutgoing('base', 'head', policy, git), { commits: 1, blobs: 1 });
   else assert.throws(() => scanOutgoing('base', 'head', policy, git), /Potential secret/);
 });
-function fixture() {
+function fixture(releaseConfig = { ...policy, enabled: false }) {
   const dir = mkdtempSync(join(tmpdir(), 'aven-release-test-'));
   const root = join(dir, 'work'), remote = join(dir, 'remote.git'); mkdirSync(root);
   const init = (args, cwd = root) => { const r = spawnSync('git', args, { cwd, encoding: 'utf8' }); assert.equal(r.status, 0, r.stderr); };
   init(['init', '--bare', '-q', remote]); init(['init', '-q', '-b', 'main']);
   init(['config', 'user.name', 'Fixture']); init(['config', 'user.email', 'fixture@example.com']);
   mkdirSync(join(root, '.ai-collab/tasks/task1'), { recursive: true });
-  writeFileSync(join(root, '.gitignore'), '.ai-collab/.runtime/\n');
-  writeFileSync(join(root, '.ai-collab/release.config.json'), JSON.stringify({ ...policy, enabled: false }));
+  writeFileSync(join(root, '.gitignore'), '.ai-collab/.runtime/\n.ai-collab/.lock/\n');
+  writeFileSync(join(root, '.ai-collab/release.config.json'), JSON.stringify(releaseConfig));
   writeFileSync(join(root, 'source.js'), 'baseline\n');
   init(['add', '.']); init(['commit', '-qm', 'baseline']); init(['remote', 'add', 'origin', remote]); init(['push', '-q', 'origin', 'main']);
   const realGit = gitRunner(root, 5000), baseHead = realGit('rev-parse', 'HEAD');
@@ -72,6 +171,14 @@ test('approved completed task pushes exact SHA and reconciles a repeated push wi
     assert.equal(f.calls.filter(args => args[0] === 'push').length, 1);
     assert.equal(f.realGit('status', '--porcelain'), '');
     assert.ok(f.states.some(state => state.stage === 'PUSHING'));
+  } finally { f.cleanup(); }
+});
+test('Vercel Production Branch mismatch prevents any Git push', async () => {
+  const f = fixture(); try {
+    await assert.rejects(preflightAndPush({ ...f.options, config: vercelPolicy,
+      client: previewApi({ projectBranch: previewBranch }).client }), /Production Branch/);
+    assert.equal(f.calls.filter(args => args[0] === 'push').length, 0);
+    assert.equal(f.realGit('ls-remote', '--heads', 'origin', policy.developmentBranch), '');
   } finally { f.cleanup(); }
 });
 for (const scenario of ['wrong-remote', 'wrong-branch', 'dirty', 'staged', 'failed-check', 'unapproved', 'disabled']) test(`push rejects ${scenario} without mutation`, () => {
@@ -123,14 +230,52 @@ test('outgoing scan rejects secrets from historical commits, without logging cre
     assert.equal(f.calls.filter(args => args[0] === 'push').length, 0);
   } finally { f.cleanup(); }
 });
-test('completion archive is immutable and legacy/incomplete checkpoint cannot authorize push', () => {
+test('completion archive is immutable and legacy/incomplete checkpoint cannot authorize push', async () => {
   const f = fixture(); try {
     const path = join(f.root, '.ai-collab/.runtime/completed', `${f.sha}.json`);
     const before = readFileSync(path, 'utf8'); archiveCompleted(f.root, f.checkpoint, checks, f.git);
     assert.equal(readFileSync(path, 'utf8'), before);
     assert.throws(() => verifyCompleted(f.root, { status: 'DONE' }, checks, f.git));
-    assert.equal(afterCompleted(f.root, { status: 'BLOCKED' }, checks).ok, false);
+    assert.equal((await afterCompleted(f.root, { status: 'BLOCKED' }, checks)).ok, false);
     assert.equal(existsSync(join(f.root, '.ai-collab/.runtime/checkpoint.json')), false);
+  } finally { f.cleanup(); }
+});
+test('automatic coordinator handoff awaits Preview before returning success', async () => {
+  const f = fixture({ ...vercelPolicy, enabled: true }); try {
+    const lock = join(f.root, '.ai-collab/.lock');
+    acquireLock(lock, true);
+    let enteredResolve, finishResolve;
+    const entered = new Promise((resolve) => { enteredResolve = resolve; });
+    const finish = new Promise((resolve) => { finishResolve = resolve; });
+    const client = { verifyProjectConfiguration: async () => ({ productionBranch: 'main' }),
+      findAndWaitForPreview: async (sha, branch) => { enteredResolve(); await finish; return { stage: 'PREVIEW_READY', sha,
+        branch, projectId: vercelPolicy.vercelProjectId, deploymentId: previewId, url: 'aven-fixture.vercel.app' }; } };
+    const pending = afterCompleted(f.root, f.checkpoint, checks, { token: 'fixture-token', git: f.git,
+      client, save: (state) => f.states.push(structuredClone(state)) });
+    let timer;
+    try { await Promise.race([entered, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Preview phase was not reached')), 2000); })]); }
+    finally { clearTimeout(timer); }
+    assert.ok(existsSync(join(lock, 'owner.json')));
+    assert.equal(f.states.at(-1).stage, 'PREVIEW_DEPLOYING');
+    finishResolve();
+    const result = await pending;
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.preview, 'PREVIEW_READY');
+    assert.equal(f.realGit('ls-remote', '--heads', 'origin', policy.developmentBranch).split(/\s+/)[0], f.sha);
+    assert.deepEqual(f.states.map((state) => state.stage), ['PUSHING', 'PUSHED', 'PREVIEW_DEPLOYING', 'PREVIEW_READY']);
+    assert.ok(existsSync(join(f.root, '.ai-collab/.runtime/completed', `${f.sha}.json`)));
+    assert.ok(existsSync(join(lock, 'owner.json')));
+    releaseLock(lock);
+  } finally { f.cleanup(); }
+});
+test('automatic coordinator handoff preserves DONE and stops before push on Vercel branch mismatch', async () => {
+  const f = fixture({ ...vercelPolicy, enabled: true }); try {
+    const result = await afterCompleted(f.root, f.checkpoint, checks, { token: 'fixture-token', git: f.git,
+      client: previewApi({ projectBranch: previewBranch }).client, save: () => {} });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /Production Branch/);
+    assert.equal(f.realGit('ls-remote', '--heads', 'origin', policy.developmentBranch), '');
+    assert.ok(existsSync(join(f.root, '.ai-collab/.runtime/completed', `${f.sha}.json`)));
   } finally { f.cleanup(); }
 });
 test('an unresolved external operation lock is never silently recovered or removed', () => {

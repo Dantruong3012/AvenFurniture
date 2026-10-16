@@ -1,6 +1,6 @@
 # Release operations and configuration
 
-Implementation stage: M1 only; release automation disabled.
+Implementation stage: M1 committed; M2 Preview adapter is under implementation and review. Release automation remains disabled.
 
 ## Read-only status
 
@@ -9,7 +9,19 @@ node .ai-collab/orchestrator.mjs doctor
 node .ai-collab/orchestrator.mjs release-status
 ```
 
-These commands report known evidence and credential availability, not authenticated permission or fabricated remote success. `deploy-status` will be added in M2 when it can report real Vercel observations.
+These commands report known evidence and credential availability, not authenticated permission or fabricated remote success. `release-status` displays the durable Preview stage when one exists. No live Preview observation has been certified by M2 yet.
+
+## M2 Preview tracking
+
+The disabled-by-default `release-push` path now observes the Git-triggered Vercel Preview after a verified push. It verifies the project's Production Branch is `main` **before** pushing, searches for the exact dev branch and commit SHA, checks the returned project/commit/branch/Preview target again, and polls the deployment to `READY` with a deadline. It never calls a Vercel write endpoint or starts a duplicate deployment. The current [Vercel list API](https://vercel.com/docs/rest-api/deployments/list-deployments) uses `/v7/deployments` with `projectId`, `sha`, `branch`, and `target` filters; this supersedes the `/v6` URL in the original M2 plan. The project read uses `/v9/projects/{id}` and the deployment detail read uses `/v13/deployments/{id}`.
+
+The coordinator awaits the automatic completion hook while holding its shared lock. When release is enabled after review, the hook archives the completed task, checks the live Vercel Production Branch before any Git push, verifies the remote SHA, and waits for the exact Git Preview result before another development task starts. The manual `release-push` command follows the same preflight and Preview checks under its own lock. A mismatch or failed Preview stops release progress without changing the already completed development task.
+
+Preview state is stored under `.ai-collab/.runtime/releases/<sha>.json`, with an append-only event log beside it. Vercel's observed Git Preview list entry uses `uid` and `target: null` while its detail uses `id` and `target: null`; the adapter verifies the exact Git source and absence of a custom environment before treating this as Preview. A 429 honors `Retry-After` within the configured deadline; a missing, canceled, blocked, errored, or stale-identity deployment fails closed. The snapshot contains deployment IDs and URLs, never tokens or raw API responses. The deployment's `READY` state alone does not mean the storefront has passed E2E or shared-database safety checks.
+
+The existing dev Preview at commit `faab317e3410d45436944dd25314472da62ac422` failed its build because the two public Supabase variables were scoped only to Production. With explicit operator approval on 2026-10-16, exactly `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` were extended to both Production and Preview; read-back verified the targets. Existing failed deployments are unchanged. No Preview build will be retried or triggered until the relevant code has completed review and a permitted Git push occurs.
+
+Local, Preview, and Production share Supabase. M2 makes only Vercel GET requests. Do not submit inquiries, sign up users, edit products, or run migrations through automated live Preview tests. Those scenarios require local disposable fixtures or a separately approved live operation.
 
 The legacy `status`, `run`, `resume`, `stop`, quota recovery and replan commands retain their existing purpose. Do not run them to clear the current admin architecture blocker as part of release setup.
 

@@ -494,7 +494,7 @@ async function run(resume) {
       writeHandoff('TASK_DONE', 'Task is committed and complete. Inspect the next approved backlog task before another run.');
       if (existsSync(join(workspace, 'release.config.json'))) {
         const { afterCompleted } = await import('./release.mjs');
-        const released = afterCompleted(root, checkpoint, config.checks);
+        const released = await afterCompleted(root, checkpoint, config.checks);
         event('RELEASE_HANDOFF', released);
         if (!released.ok) { process.exitCode = 1; return; } // Preserve the completed development checkpoint.
       }
@@ -528,7 +528,7 @@ try {
   else if (action === 'replan') replan();
   else if (['release-status', 'release-push', 'doctor'].includes(action)) {
     const { releaseCommand } = await import('./release.mjs');
-    releaseCommand(root, action);
+    await releaseCommand(root, action);
   }
   else if (action === 'status') {
     const state = existsSync(checkpointPath) ? JSON.parse(read(checkpointPath)) : null;
