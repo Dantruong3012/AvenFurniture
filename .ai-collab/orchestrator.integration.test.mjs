@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 
 const source = dirname(fileURLToPath(import.meta.url));
 function fixture(mode = 'success', second = false) {
@@ -13,6 +14,7 @@ function fixture(mode = 'success', second = false) {
   for (const name of ['workflow.mjs', 'orchestrator.mjs', 'orchestrator-core.mjs', 'release.mjs', 'release-git.mjs', 'release.config.json', '.gitignore']) copyFileSync(join(source, name), join(collab, name));
   writeFileSync(join(dir, 'AGENTS.md'), 'Isolated deterministic coordinator test.');
   writeFileSync(join(dir, 'scenario.json'), JSON.stringify({ mode }));
+  if (mode === 'architecture-block') writeFileSync(join(dir, 'package.json'), JSON.stringify({ scripts: { lint: 'eslint', test: 'node --test' } }));
   writeFileSync(join(dir, 'verify.mjs'), `import {readFileSync,readdirSync} from 'node:fs'; import assert from 'node:assert/strict'; const files=readdirSync('.').filter(p=>/^t[12]\\.txt$/.test(p)); assert.ok(files.length); for(const f of files)assert.equal(readFileSync(f,'utf8'),'verified'); if(JSON.parse(readFileSync('scenario.json')).mode==='fail-check') process.exit(2);`);
   writeFileSync(join(dir, 'fake.mjs'), `import {readFileSync,writeFileSync,existsSync} from 'node:fs';
 import {dirname} from 'node:path'; import {fileURLToPath} from 'node:url';
@@ -26,12 +28,21 @@ const id=(prompt.match(/(?:Plan task|Review task|Implement task) (t[12])/i)||[])
 if(agy&&phase==='plan'&&prompt.includes('Repository tracked files'))process.exit(7);
 if(agy&&phase==='review'&&(!prompt.includes('NEW FILES')||!prompt.includes('verified')||prompt.includes('CURRENT FILES')))process.exit(7);
 const result={status:'READY',summary:'Fixture evidence',paths:[id+'.txt'],details:'Implement the exact proof file.'};
+if(agy&&phase==='plan'&&mode==='architecture-block') {
+  const recovering=prompt.includes('reviewed inquiry-status architecture recovery');
+  result.details=recovering&&!existsSync('.ai-collab/.runtime/wrong-architecture-statuses')?'Supported inquiry statuses: new, consulting, completed, cancelled. Implement the exact proof file.':'Old inquiry statuses: new, in_progress, resolved, archived. Implement the exact proof file.';
+  if(recovering&&existsSync('.ai-collab/.runtime/wrong-architecture-paths'))result.paths=['unexpected.txt'];
+}
 if(agy&&phase==='plan'&&mode==='unsafe-plan-artifact')result.paths.push('.ai-collab/tasks/'+id+'/IMPLEMENTATION.md');
 if(agy&&phase==='plan'&&mode==='replan-block'&&prompt.includes('Revised fixture ownership')){
   if(!prompt.includes('app/cart/page.tsx')||!prompt.includes('Existing tracked application and test paths'))process.exit(7);
   result.paths=existsSync('.ai-collab/.runtime/wrong-replan-paths')?['src/cart/page.tsx']:['t1.txt','app/cart/page.tsx','components/forms/contact-form.tsx'];
 }
 if(phase==='implement') {
+  if(mode==='architecture-block'&&!existsSync('.ai-collab/.runtime/architecture-once')){
+    writeFileSync('.ai-collab/.runtime/architecture-once','yes');
+    result.status='BLOCKED';result.summary='The approved plan requires statuses incompatible with the existing database constraint; resolution exceeds the authorized paths.';
+  } else
   if(mode==='replan-block'&&!existsSync('.ai-collab/.runtime/replan-once')){
     writeFileSync('.ai-collab/.runtime/replan-once','yes');
     result.status='BLOCKED';result.summary='The exact path allowlist excludes the existing cart and product integration points. No files changed.';
@@ -362,4 +373,95 @@ test('fresh Planning cannot expand or replace approved replan ownership',async()
   assert.equal(checkpoint(dir).status,'BLOCKED');assert.deepEqual(checkpoint(dir).paths,[]);
   assert.equal(events(dir).filter(e=>e.phase==='DONE').length,0);
  }finally{rmSync(dir,{recursive:true});}
+});
+
+async function blockedArchitectureFixture(reason = 'valid') {
+  const dir = fixture('architecture-block');
+  const failed = await run(dir);
+  assert.equal(failed.code, 1, failed.output);
+  assert.equal(checkpoint(dir).status, 'BLOCKED');
+  const adminPlan = join(dir, '.ai-collab/tasks/t1/PLAN.md');
+  writeFileSync(adminPlan, `# Plan: t1\n\nStatus: ${reason === 'unapproved-plan' ? 'DRAFT' : 'APPROVED'}\n\nThis revised plan aligns with the existing production schema.\n- \`new\`: awaiting triage\n- \`consulting\`: active\n- \`completed\`: resolved\n- \`cancelled\`: closed\n\nOwned paths: t1.txt\n`);
+  const historyFile = join(dir, 'reviewed-history.md');
+  writeFileSync(historyFile, 'Prior reviewed fixture setup.\n');
+  if (reason === 'committed-source') writeFileSync(join(dir, 't1.txt'), 'changed before recovery\n');
+  if (reason === 'changed-script') {
+    const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
+    pkg.scripts.lint = 'different';
+    writeFileSync(join(dir, 'package.json'), JSON.stringify(pkg));
+  } else {
+    const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
+    pkg.scripts['test:e2e'] = 'playwright test';
+    pkg.scripts['ai:auto'] = 'node .ai-collab/autopilot.mjs';
+    writeFileSync(join(dir, 'package.json'), JSON.stringify(pkg));
+  }
+  gitCall(dir, 'add', 'reviewed-history.md', 'package.json');
+  if (reason === 'committed-source') gitCall(dir, 'add', 't1.txt');
+  gitCall(dir, 'commit', '-qm', 'test: reviewed fixture history');
+  const priorHistory = gitCall(dir, 'rev-list', '--reverse', `${checkpoint(dir).baseHead}..HEAD`).split('\n');
+  const repairPlan = join(dir, '.ai-collab/tasks/orchestrator-architecture-recovery/PLAN.md');
+  mkdirSync(dirname(repairPlan), { recursive: true });
+  writeFileSync(repairPlan, '# Plan: orchestrator-architecture-recovery\n\nStatus: APPROVED\nPlanner: Antigravity\n');
+  const review = join(dir, '.ai-collab/tasks/orchestrator-architecture-recovery/REVIEW.md');
+  const planDigest = createHash('sha256').update(JSON.stringify(readFileSync(adminPlan, 'utf8'))).digest('hex');
+  writeFileSync(review, `# Review: orchestrator-architecture-recovery\n\nStatus: ${reason === 'unapproved-review' ? 'CHANGES_REQUESTED' : 'APPROVED'}\nReviewer: Antigravity\nApproved admin plan digest: ${reason === 'wrong-plan-digest' ? '0'.repeat(64) : planDigest}\nReviewed history: ${reason === 'wrong-history' ? '0'.repeat(40) : priorHistory.join(', ')}\n`);
+  const runner = join(dir, '.ai-collab/orchestrator.mjs');
+  writeFileSync(runner, readFileSync(runner, 'utf8') + '\n// architecture recovery fixture\n');
+  gitCall(dir, 'add', '.ai-collab/orchestrator.mjs', '.ai-collab/tasks/orchestrator-architecture-recovery/PLAN.md', '.ai-collab/tasks/orchestrator-architecture-recovery/REVIEW.md');
+  gitCall(dir, 'commit', '-qm', 'fix(orchestrator): reviewed architecture recovery');
+  if (reason === 'dirty-source') writeFileSync(join(dir, 'unexpected.txt'), 'unowned edit\n');
+  if (reason === 'staged') { writeFileSync(join(dir, 'unexpected.txt'), 'staged edit\n'); gitCall(dir, 'add', 'unexpected.txt'); }
+  if (reason === 'changed-admin-plan') writeFileSync(adminPlan, readFileSync(adminPlan, 'utf8') + '\nUnreviewed plan edit.\n');
+  if (reason === 'missing-receipt') rmSync(join(dir, `.ai-collab/.runtime/t1-${checkpoint(dir).planReceipt.sequence}-plan.receipt.json`));
+  return dir;
+}
+test('reviewed architecture recovery preserves evidence and reruns actual Planning', async () => {
+  const dir = await blockedArchitectureFixture();
+  try {
+    const old = checkpoint(dir);
+    const receiptPath = join(dir, `.ai-collab/.runtime/t1-${old.planReceipt.sequence}-plan.receipt.json`);
+    const receipt = readFileSync(receiptPath, 'utf8');
+    const blockedImplementation = readFileSync(join(dir, '.ai-collab/tasks/t1/IMPLEMENTATION.md'), 'utf8');
+    const recovered = await run(dir, 'recover-architecture');
+    assert.equal(recovered.code, 0, recovered.output);
+    const ready = checkpoint(dir);
+    assert.equal(ready.phase, 'PLANNING');
+    assert.equal(ready.status, 'RUNNING');
+    assert.deepEqual(ready.paths, []);
+    assert.deepEqual(ready.approvedReplanPaths, ['t1.txt']);
+    assert.deepEqual(ready.replanHistory[0].planReceipt, old.planReceipt);
+    assert.equal(readFileSync(receiptPath, 'utf8'), receipt);
+    assert.equal(readFileSync(join(dir, `.ai-collab/.runtime/t1-${old.sequence}-architecture-blocker.md`), 'utf8'), blockedImplementation);
+    assert.equal((await run(dir, 'recover-architecture')).code, 1);
+    const resumed = await run(dir, 'resume');
+    assert.equal(resumed.code, 0, resumed.output);
+    assert.equal(events(dir).filter((entry) => entry.phase === 'CLI_STARTED' && entry.agent === 'antigravity' && entry.operation === 'plan').length, 2);
+    assert.deepEqual(events(dir).filter((entry) => entry.phase === 'DONE').map((entry) => entry.task), ['t1']);
+  } finally { rmSync(dir, { recursive: true }); }
+});
+for (const deviation of ['wrong-architecture-statuses', 'wrong-architecture-paths']) test(`recovered Planning rejects ${deviation} before implementation`, async () => {
+  const dir = await blockedArchitectureFixture();
+  try {
+    assert.equal((await run(dir, 'recover-architecture')).code, 0);
+    writeFileSync(join(dir, `.ai-collab/.runtime/${deviation}`), 'yes');
+    const result = await run(dir, 'resume');
+    assert.equal(result.code, 1, result.output);
+    assert.equal(checkpoint(dir).status, 'BLOCKED');
+    assert.equal(events(dir).filter((entry) => entry.phase === 'DONE').length, 0);
+    assert.ok(!existsSync(join(dir, 't1.txt')));
+  } finally { rmSync(dir, { recursive: true }); }
+});
+for (const reason of ['unapproved-plan', 'unapproved-review', 'wrong-history', 'wrong-plan-digest', 'committed-source', 'changed-script', 'dirty-source', 'staged', 'changed-admin-plan', 'missing-receipt']) test(`architecture recovery rejects ${reason} without changing checkpoint`, async () => {
+  const dir = await blockedArchitectureFixture(reason);
+  try {
+    const checkpointPath = join(dir, '.ai-collab/.runtime/checkpoint.json');
+    const saved = readFileSync(checkpointPath, 'utf8');
+    const implementationPath = join(dir, '.ai-collab/tasks/t1/IMPLEMENTATION.md');
+    const implementation = readFileSync(implementationPath, 'utf8');
+    const result = await run(dir, 'recover-architecture');
+    assert.equal(result.code, 1, result.output);
+    assert.equal(readFileSync(checkpointPath, 'utf8'), saved);
+    assert.equal(readFileSync(implementationPath, 'utf8'), implementation);
+    assert.ok(!existsSync(join(dir, `.ai-collab/.runtime/t1-${checkpoint(dir).sequence}-architecture-blocker.md`)));
+  } finally { rmSync(dir, { recursive: true }); }
 });
