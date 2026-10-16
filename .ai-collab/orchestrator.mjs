@@ -25,8 +25,11 @@ const replanReviewPath = '.ai-collab/tasks/orchestrator-replan-recovery/REVIEW.m
 const replanRunnerPaths = new Set(['.ai-collab/orchestrator.mjs', '.ai-collab/orchestrator-core.mjs', '.ai-collab/orchestrator.integration.test.mjs', '.ai-collab/orchestrator.test.mjs', '.ai-collab/README.md', '.ai-collab/tasks/orchestrator-replan-recovery/IMPLEMENTATION.md', replanReviewPath]);
 const architectureReviewPath = '.ai-collab/tasks/orchestrator-architecture-recovery/REVIEW.md';
 const architectureRunnerPaths = new Set(['.ai-collab/orchestrator.mjs', '.ai-collab/orchestrator.integration.test.mjs', '.ai-collab/README.md', '.ai-collab/tasks/orchestrator-architecture-recovery/PLAN.md', '.ai-collab/tasks/orchestrator-architecture-recovery/IMPLEMENTATION.md', architectureReviewPath]);
+const architecturePlanReviewPath = '.ai-collab/tasks/orchestrator-architecture-plan-recovery/REVIEW.md';
+const architecturePlanRunnerPaths = new Set(['.ai-collab/orchestrator.mjs', '.ai-collab/orchestrator.integration.test.mjs', '.ai-collab/README.md', '.ai-collab/tasks/orchestrator-architecture-plan-recovery/PLAN.md', '.ai-collab/tasks/orchestrator-architecture-plan-recovery/IMPLEMENTATION.md', architecturePlanReviewPath]);
 const architectureBlocker = 'codex: The approved plan requires statuses incompatible with the existing database constraint; resolution exceeds the authorized paths.';
 const inquiryStatuses = ['new', 'consulting', 'completed', 'cancelled'];
+const architecturePlanningError = 'Antigravity Planning changed approved inquiry-status semantics';
 let checkpoint;
 const save = () => atomicJSON(checkpointPath, checkpoint);
 function writeHandoff(reason, nextAction = 'Inspect checkpoint and continue with the supported coordinator command.') {
@@ -319,6 +322,73 @@ function recoverArchitecture() {
     event('ARCHITECTURE_RECOVERY_READY', { previousSequence: checkpoint.sequence, reviewedCommits: reviewedHistory.length });
   } finally { rmSync(lock, { recursive: true }); }
 }
+function hasApprovedInquiryStatuses(details) {
+  if (typeof details !== 'string') return false;
+  const lines = details.split(/\r?\n/);
+  const heading = lines.findIndex((line) => /\b(?:use exactly these statuses|supported inquiry statuses):\s*$/i.test(line));
+  if (heading < 0) return false;
+  const declared = [];
+  for (let i = heading + 1; i < lines.length; i++) {
+    const match = lines[i].match(/^\s*-\s*`([a-z_]+)`\s*$/);
+    if (!match) break;
+    declared.push(match[1]);
+  }
+  if (JSON.stringify(declared) !== JSON.stringify(inquiryStatuses)) return false;
+  return !lines.some((line) => /\b(?:in_progress|resolved|archived)\b/.test(line) && !/\b(?:do not|never|avoid|deprecated|obsolete|prior|previous|old)\b/i.test(line));
+}
+function recoverArchitecturePlan() {
+  acquireLock(lock, true);
+  try {
+    if (!existsSync(checkpointPath)) throw new Error('No checkpoint to recover');
+    checkpoint = JSON.parse(read(checkpointPath));
+    const id = checkpoint.task?.id;
+    const data = backlog();
+    const task = data.tasks.find((item) => item.id === id);
+    if (!id || checkpoint.status !== 'BLOCKED' || checkpoint.phase !== 'PLANNING' || checkpoint.round !== 0 || checkpoint.error !== architecturePlanningError || !task || task.status !== 'BLOCKED' || checkpoint.paths?.length || checkpoint.planReceipt || !checkpoint.approvedReplanPaths?.length || !checkpoint.approvedArchitecturePlanDigest) throw new Error('Only the saved architecture Planning validator failure can be recovered');
+    const state = read(join(workspace, 'STATE.md'));
+    if (field(state, 'Active task') !== id || field(state, 'Current phase') !== 'BLOCKED' || field(data.content, 'Roadmap approval') !== 'APPROVED' || checkpoint.configDigest !== configDigest || checkpoint.scriptsDigest !== digest(requiredScripts())) throw new Error('Workflow state, configuration, or checks changed since Planning');
+    const planPath = `.ai-collab/tasks/${id}/PLAN.md`;
+    const implPath = `.ai-collab/tasks/${id}/IMPLEMENTATION.md`;
+    const plan = read(taskPath(id, 'PLAN.md'));
+    const blocked = read(taskPath(id, 'IMPLEMENTATION.md'));
+    if (digest(plan) !== checkpoint.approvedArchitecturePlanDigest || field(plan, 'Status') !== 'APPROVED') throw new Error('Approved admin plan changed since Planning');
+    if (blocked !== `# Implementation: ${id}\n\nStatus: BLOCKED\n\n${architecturePlanningError}\n\nSee local checkpoint and logs; preserve all working changes.\n`) throw new Error('Planning blocker artifact changed');
+    const receiptPath = join(runtime, `${id}-${checkpoint.sequence}-plan.receipt.json`);
+    if (!existsSync(receiptPath)) throw new Error('Successful Planning receipt is missing');
+    const receipt = JSON.parse(read(receiptPath));
+    if (receipt.agent !== 'antigravity' || receipt.operation !== 'plan' || receipt.sequence !== checkpoint.sequence || receipt.exitCode !== 0 || receipt.status !== 'READY' || receipt.result?.status !== 'READY' || receipt.inputDigest !== receipt.outputDigest) throw new Error('Saved Planning receipt is not a successful read-only invocation');
+    const paths = validatePaths(receipt.result.paths);
+    if (JSON.stringify(paths) !== JSON.stringify(checkpoint.approvedReplanPaths) || !hasApprovedInquiryStatuses(receipt.result.details)) throw new Error('Saved Planning receipt differs from approved paths or statuses');
+    if (git('diff', '--cached', '--name-only')) throw new Error('Unexpected staged changes before Planning recovery');
+    const metadata = new Set(['.ai-collab/BACKLOG.md', '.ai-collab/STATE.md', planPath, implPath]);
+    if (changedWorkingPaths().some((path) => !metadata.has(path))) throw new Error('Uncommitted changes outside blocked task metadata');
+    const head = git('rev-parse', 'HEAD');
+    if (git('rev-parse', `${head}^`) !== checkpoint.baseHead) throw new Error('Planning recovery requires one reviewed runner commit after the checkpoint');
+    const committed = git('diff', '--name-only', checkpoint.baseHead, head).split('\n').filter(Boolean);
+    if (!committed.includes('.ai-collab/orchestrator.mjs') || !committed.includes(architecturePlanReviewPath) || committed.some((path) => !architecturePlanRunnerPaths.has(path))) throw new Error('Planning recovery commit contains unreviewed paths');
+    const review = git('show', `${head}:${architecturePlanReviewPath}`);
+    const runnerPlan = git('show', `${head}:.ai-collab/tasks/orchestrator-architecture-plan-recovery/PLAN.md`);
+    if (field(review, 'Status') !== 'APPROVED' || !/^Reviewer: Antigravity\b/m.test(review) || field(runnerPlan, 'Status') !== 'APPROVED' || !/^Planner: Antigravity\b/m.test(runnerPlan) || field(review, 'Reviewed runner base') !== checkpoint.baseHead || field(review, 'Approved admin plan digest') !== digest(plan) || field(review, 'Approved planning receipt digest') !== digest(receipt)) throw new Error('Planning recovery lacks matching Antigravity review');
+    const current = snapshot(root);
+    if (changes(checkpoint.baseline, current).some((path) => !metadata.has(path) && !architecturePlanRunnerPaths.has(path))) throw new Error('Task source changed since successful Planning');
+    const archive = join(runtime, `${id}-${checkpoint.sequence}-architecture-planning-blocker.md`);
+    if (existsSync(archive)) throw new Error('Planning blocker archive already exists; inspect before retry');
+
+    const original = { phase: checkpoint.phase, round: checkpoint.round, status: checkpoint.status, error: checkpoint.error, sequence: checkpoint.sequence, implementationArtifactDigest: digest(blocked), baseHead: checkpoint.baseHead };
+    writeFileSync(archive, blocked, { mode: 0o600 });
+    checkpoint.architecturePlanningHistory = [...(checkpoint.architecturePlanningHistory ?? []), original];
+    checkpoint.paths = paths;
+    checkpoint.planReceipt = receipt;
+    checkpoint.error = null;
+    checkpoint.baseHead = head;
+    artifact('PLAN.md', `# Plan: ${id}\n\nStatus: APPROVED\n\n${receipt.result.details}\n\nOwned paths: ${paths.join(', ')}\n`);
+    artifact('IMPLEMENTATION.md', `# Implementation: ${id}\n\nStatus: NOT_STARTED\n\nRecovered the actual Antigravity Planning receipt after the reviewed validator fix. Previous blocker and receipt remain in private history.\n`);
+    checkpoint.baseline = snapshot(root);
+    checkpoint.runnerUpgrade = { from: original.baseHead, to: head, paths: committed };
+    transition('READY');
+    event('ARCHITECTURE_PLAN_RECOVERED', { receipt: receipt.sequence, paths });
+  } finally { rmSync(lock, { recursive: true }); }
+}
 const boundary = 'Read AGENTS.md. Work only on this task. Never push, deploy, access external Production services, run a Production migration, change credentials/secrets, or modify another task. Do not use MCP services or bypass permission checks. Never change Git HEAD/index unless this prompt explicitly requests the commit phase. Do not modify orchestrator code/config or test commands. Do not write status artifacts; the coordinator persists your structured response.';
 function reviewContext() {
   const tracked = new Set(git('ls-tree', '-r', '--name-only', checkpoint.baseHead).split('\n'));
@@ -464,7 +534,7 @@ async function taskLoop() {
       const receipt = await agent('antigravity', 'plan', `Plan task ${checkpoint.task.id}. Approved acceptance criteria: ${checkpoint.task.criteria}. Existing task plan: ${prior || '(none)'}. ${architectureNote} ${planningContext(prior)} Return READY only if feasible without Production actions; otherwise BLOCKED. Use the supplied real repository file index: identify existing integration files, new modules, and test files by exact path. Do not assume a src/ directory or invent component names; do not use wildcards. The paths JSON array is the exact source ownership allowlist for Codex: include only application source, tests, and local migration files that Codex may edit. Never include any .ai-collab/ path, including PLAN.md, IMPLEMENTATION.md, REVIEW.md, BACKLOG.md or STATE.md. The coordinator writes lifecycle artifacts separately from paths. If the existing plan assigns IMPLEMENTATION.md to Codex, treat that as lifecycle evidence owned by the coordinator, not a source path. Return the complete implementation plan with acceptance criteria in details. Do not edit files. Do not expand scope or remove existing blockers.`, ['READY']);
       const plannedPaths = validatePaths(receipt.result.paths);
       if (checkpoint.approvedReplanPaths && (plannedPaths.length !== checkpoint.approvedReplanPaths.length || plannedPaths.some((path) => !checkpoint.approvedReplanPaths.includes(path)))) throw new Error('Antigravity Planning paths differ from the approved revised plan');
-      if (checkpoint.approvedArchitecturePlanDigest && (!inquiryStatuses.every((status) => new RegExp(`\\b${status}\\b`).test(receipt.result.details)) || /\b(?:in_progress|resolved|archived)\b/.test(receipt.result.details))) throw new Error('Antigravity Planning changed approved inquiry-status semantics');
+      if (checkpoint.approvedArchitecturePlanDigest && !hasApprovedInquiryStatuses(receipt.result.details)) throw new Error(architecturePlanningError);
       checkpoint.paths = plannedPaths; checkpoint.planReceipt = receipt;
       artifact('PLAN.md', `# Plan: ${checkpoint.task.id}\n\nStatus: APPROVED\n\n${receipt.result.details}\n\nOwned paths: ${checkpoint.paths.join(', ')}\n`);
       transition('READY');
@@ -610,6 +680,7 @@ try {
   else if (action === 'recover-plan-path') recoverPlanPath();
   else if (action === 'replan') replan();
   else if (action === 'recover-architecture') recoverArchitecture();
+  else if (action === 'recover-architecture-plan') recoverArchitecturePlan();
   else if (['release-status', 'release-push', 'doctor'].includes(action)) {
     const { releaseCommand } = await import('./release.mjs');
     await releaseCommand(root, action);
@@ -620,5 +691,5 @@ try {
     console.log(JSON.stringify({ checkpoint: state ? { task: state.task?.id ?? null, status: state.status, phase: state.phase, round: state.round, error: state.error, quota: state.quota ?? null, lastTokenUsage: state.lastTokenUsage ?? null } : null, handoff: existsSync(join(runtime, 'HANDOFF.md')) ? '.ai-collab/.runtime/HANDOFF.md' : null, next: select()?.id ?? null, paused: tasks.filter((task) => task.status === 'PAUSED_QUOTA').map((task) => task.id), blocked: tasks.filter((task) => task.status !== 'PAUSED_QUOTA' && hasBlocker(task)).map((task) => task.id), lock: existsSync(join(lock, 'owner.json')) ? JSON.parse(read(join(lock, 'owner.json'))) : null, receipts: existsSync(runtime) ? readdirSync(runtime).filter((name) => name.endsWith('.receipt.json')).length : 0 }, null, 2));
   }
   else if (action === 'stop') { mkdirSync(runtime, { recursive: true }); writeFileSync(stopFile, 'stop\n'); console.log('Stop requested; active child will be terminated and checkpoint preserved.'); }
-  else throw new Error('Usage: node .ai-collab/orchestrator.mjs run|resume [--quota-ready]|recover-quota|recover-plan-path|replan|recover-architecture|status|stop|doctor|release-status|release-push');
+  else throw new Error('Usage: node .ai-collab/orchestrator.mjs run|resume [--quota-ready]|recover-quota|recover-plan-path|replan|recover-architecture|recover-architecture-plan|status|stop|doctor|release-status|release-push');
 } catch (error) { console.error(`Orchestrator stopped: ${error.message}`); process.exitCode = 1; }

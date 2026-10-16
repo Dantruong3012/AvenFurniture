@@ -30,7 +30,8 @@ if(agy&&phase==='review'&&(!prompt.includes('NEW FILES')||!prompt.includes('veri
 const result={status:'READY',summary:'Fixture evidence',paths:[id+'.txt'],details:'Implement the exact proof file.'};
 if(agy&&phase==='plan'&&mode==='architecture-block') {
   const recovering=prompt.includes('reviewed inquiry-status architecture recovery');
-  result.details=recovering&&!existsSync('.ai-collab/.runtime/wrong-architecture-statuses')?'Supported inquiry statuses: new, consulting, completed, cancelled. Implement the exact proof file.':'Old inquiry statuses: new, in_progress, resolved, archived. Implement the exact proof file.';
+  const tick=String.fromCharCode(96);
+  result.details=recovering&&!existsSync('.ai-collab/.runtime/wrong-architecture-statuses')?'Supported inquiry statuses:\\n- '+tick+'new'+tick+'\\n- '+tick+'consulting'+tick+'\\n- '+tick+'completed'+tick+'\\n- '+tick+'cancelled'+tick+'\\nDo not propose or introduce in_progress, resolved, or archived.':'Supported inquiry statuses:\\n- '+tick+'new'+tick+'\\n- '+tick+'in_progress'+tick+'\\n- '+tick+'resolved'+tick+'\\n- '+tick+'archived'+tick;
   if(recovering&&existsSync('.ai-collab/.runtime/wrong-architecture-paths'))result.paths=['unexpected.txt'];
 }
 if(agy&&phase==='plan'&&mode==='unsafe-plan-artifact')result.paths.push('.ai-collab/tasks/'+id+'/IMPLEMENTATION.md');
@@ -463,5 +464,78 @@ for (const reason of ['unapproved-plan', 'unapproved-review', 'wrong-history', '
     assert.equal(readFileSync(checkpointPath, 'utf8'), saved);
     assert.equal(readFileSync(implementationPath, 'utf8'), implementation);
     assert.ok(!existsSync(join(dir, `.ai-collab/.runtime/t1-${checkpoint(dir).sequence}-architecture-blocker.md`)));
+  } finally { rmSync(dir, { recursive: true }); }
+});
+
+async function blockedArchitecturePlanningFixture(reason = 'valid') {
+  const dir = await blockedArchitectureFixture();
+  assert.equal((await run(dir, 'recover-architecture')).code, 0);
+  const path = join(dir, '.ai-collab/.runtime/checkpoint.json');
+  const saved = checkpoint(dir);
+  const tick = '`';
+  const statuses = reason === 'wrong-statuses' ? ['new', 'in_progress', 'completed', 'cancelled'] : ['new', 'consulting', 'completed', 'cancelled'];
+  const details = `# Replanned inquiry portal\n\nSupported inquiry statuses:\n${statuses.map(status => `- ${tick}${status}${tick}`).join('\n')}\nDo not propose or introduce in_progress, resolved, or archived.\n`;
+  const receipt = { agent: 'antigravity', operation: 'plan', sequence: saved.sequence + 1, exitCode: 0, status: 'READY', result: { status: 'READY', summary: 'Approved fixture plan', paths: reason === 'wrong-paths' ? ['unexpected.txt'] : saved.approvedReplanPaths, details }, inputDigest: 'a'.repeat(64), outputDigest: 'a'.repeat(64) };
+  writeFileSync(join(dir, `.ai-collab/.runtime/t1-${receipt.sequence}-plan.receipt.json`), JSON.stringify(receipt));
+  saved.sequence = receipt.sequence;
+  saved.status = 'BLOCKED';
+  saved.error = 'Antigravity Planning changed approved inquiry-status semantics';
+  writeFileSync(path, JSON.stringify(saved));
+  const blocker = `# Implementation: t1\n\nStatus: BLOCKED\n\n${saved.error}\n\nSee local checkpoint and logs; preserve all working changes.\n`;
+  writeFileSync(join(dir, '.ai-collab/tasks/t1/IMPLEMENTATION.md'), blocker);
+  const backlogPath = join(dir, '.ai-collab/BACKLOG.md');
+  writeFileSync(backlogPath, readFileSync(backlogPath, 'utf8').replace('| PLANNING |', '| BLOCKED |'));
+  const statePath = join(dir, '.ai-collab/STATE.md');
+  writeFileSync(statePath, readFileSync(statePath, 'utf8').replace('Current phase: PLANNING', 'Current phase: BLOCKED'));
+  const repairPlan = join(dir, '.ai-collab/tasks/orchestrator-architecture-plan-recovery/PLAN.md');
+  mkdirSync(dirname(repairPlan), { recursive: true });
+  writeFileSync(repairPlan, '# Plan: orchestrator-architecture-plan-recovery\n\nStatus: APPROVED\nPlanner: Antigravity\n');
+  const review = join(dir, '.ai-collab/tasks/orchestrator-architecture-plan-recovery/REVIEW.md');
+  const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  writeFileSync(review, `# Review: orchestrator-architecture-plan-recovery\n\nStatus: ${reason === 'unapproved-review' ? 'CHANGES_REQUESTED' : 'APPROVED'}\nReviewer: Antigravity\nReviewed runner base: ${saved.baseHead}\nApproved admin plan digest: ${reason === 'wrong-plan-digest' ? '0'.repeat(64) : hash(readFileSync(join(dir, '.ai-collab/tasks/t1/PLAN.md'), 'utf8'))}\nApproved planning receipt digest: ${hash(receipt)}\n`);
+  const runner = join(dir, '.ai-collab/orchestrator.mjs');
+  writeFileSync(runner, readFileSync(runner, 'utf8') + '\n// reviewed Planning recovery fixture\n');
+  if (reason === 'extra-history') { writeFileSync(join(dir, 'unrelated.md'), 'extra commit\n'); gitCall(dir, 'add', 'unrelated.md'); gitCall(dir, 'commit', '-qm', 'unreviewed history'); }
+  gitCall(dir, 'add', '.ai-collab/orchestrator.mjs', '.ai-collab/tasks/orchestrator-architecture-plan-recovery/PLAN.md', '.ai-collab/tasks/orchestrator-architecture-plan-recovery/REVIEW.md');
+  gitCall(dir, 'commit', '-qm', 'fix(orchestrator): reviewed Planning receipt recovery');
+  if (reason === 'tampered-receipt') writeFileSync(join(dir, `.ai-collab/.runtime/t1-${receipt.sequence}-plan.receipt.json`), JSON.stringify({ ...receipt, result: { ...receipt.result, summary: 'tampered' } }));
+  if (reason === 'missing-receipt') rmSync(join(dir, `.ai-collab/.runtime/t1-${receipt.sequence}-plan.receipt.json`));
+  if (reason === 'dirty-source') writeFileSync(join(dir, 'unowned.txt'), 'dirty\n');
+  if (reason === 'staged') { writeFileSync(join(dir, 'unowned.txt'), 'staged\n'); gitCall(dir, 'add', 'unowned.txt'); }
+  return dir;
+}
+test('reviewed Planning receipt recovery adopts immutable receipt and resumes implementation', async () => {
+  const dir = await blockedArchitecturePlanningFixture();
+  try {
+    const before = checkpoint(dir);
+    const receiptPath = join(dir, `.ai-collab/.runtime/t1-${before.sequence}-plan.receipt.json`);
+    const receiptText = readFileSync(receiptPath, 'utf8');
+    const blocker = readFileSync(join(dir, '.ai-collab/tasks/t1/IMPLEMENTATION.md'), 'utf8');
+    const recovered = await run(dir, 'recover-architecture-plan');
+    assert.equal(recovered.code, 0, recovered.output);
+    const ready = checkpoint(dir);
+    assert.equal(ready.status, 'RUNNING');
+    assert.equal(ready.phase, 'READY');
+    assert.deepEqual(ready.paths, ['t1.txt']);
+    assert.equal(ready.planReceipt.sequence, before.sequence);
+    assert.equal(readFileSync(receiptPath, 'utf8'), receiptText);
+    assert.equal(readFileSync(join(dir, `.ai-collab/.runtime/t1-${before.sequence}-architecture-planning-blocker.md`), 'utf8'), blocker);
+    const finished = await run(dir, 'resume');
+    assert.equal(finished.code, 0, finished.output);
+    assert.deepEqual(events(dir).filter(entry => entry.phase === 'DONE').map(entry => entry.task), ['t1']);
+  } finally { rmSync(dir, { recursive: true }); }
+});
+for (const reason of ['wrong-statuses', 'wrong-paths', 'unapproved-review', 'wrong-plan-digest', 'extra-history', 'tampered-receipt', 'missing-receipt', 'dirty-source', 'staged']) test(`Planning receipt recovery rejects ${reason} and preserves checkpoint`, async () => {
+  const dir = await blockedArchitecturePlanningFixture(reason);
+  try {
+    const path = join(dir, '.ai-collab/.runtime/checkpoint.json');
+    const before = readFileSync(path, 'utf8');
+    const implementationPath = join(dir, '.ai-collab/tasks/t1/IMPLEMENTATION.md');
+    const blocker = readFileSync(implementationPath, 'utf8');
+    const result = await run(dir, 'recover-architecture-plan');
+    assert.equal(result.code, 1, result.output);
+    assert.equal(readFileSync(path, 'utf8'), before);
+    assert.equal(readFileSync(implementationPath, 'utf8'), blocker);
+    assert.ok(!existsSync(join(dir, `.ai-collab/.runtime/t1-${checkpoint(dir).sequence}-architecture-planning-blocker.md`)));
   } finally { rmSync(dir, { recursive: true }); }
 });
