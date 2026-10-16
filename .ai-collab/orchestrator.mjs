@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync, readdirSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { root, workspace, backlog, nextTask, hasBlocker, field, replaceField, setTaskRow, taskPath, changedWorkingPaths, scanStaged, git } from './workflow.mjs';
-import { schema, validateResult, atomicJSON, snapshot, digest, changes, assertScope, validatePaths, acquireLock, releaseLock, execute, assertNoSecrets, quotaFailure } from './orchestrator-core.mjs';
+import { schema, validateResult, atomicJSON, snapshot, digest, changes, assertScope, validatePaths, acquireLock, releaseLock, execute, assertNoSecrets, quotaFailure, contextFailure, agentTokenUsage, tokenWarning, handoffMarkdown, redactSensitive, agentEnvironment } from './orchestrator-core.mjs';
 
 const runtime = join(workspace, '.runtime');
 const checkpointPath = join(runtime, 'checkpoint.json');
@@ -24,6 +25,22 @@ const replanReviewPath = '.ai-collab/tasks/orchestrator-replan-recovery/REVIEW.m
 const replanRunnerPaths = new Set(['.ai-collab/orchestrator.mjs', '.ai-collab/orchestrator-core.mjs', '.ai-collab/orchestrator.integration.test.mjs', '.ai-collab/orchestrator.test.mjs', '.ai-collab/README.md', '.ai-collab/tasks/orchestrator-replan-recovery/IMPLEMENTATION.md', replanReviewPath]);
 let checkpoint;
 const save = () => atomicJSON(checkpointPath, checkpoint);
+function writeHandoff(reason, nextAction = 'Inspect checkpoint and continue with the supported coordinator command.') {
+  if (!checkpoint?.task?.id) return;
+  // A private, ignored Markdown file stays usable even when an agent cannot answer.
+  // Never copy raw prompts, logs, or arbitrary agent text into it.
+  let branch = '-', head = '-', changedPaths = [];
+  try {
+    branch = git('branch', '--show-current');
+    head = git('rev-parse', 'HEAD');
+    changedPaths = changedWorkingPaths();
+  } catch { /* Preserve the checkpoint even if Git inspection fails. */ }
+  const receipts = existsSync(runtime)
+    ? readdirSync(runtime).filter((name) => name.startsWith(`${checkpoint.task.id}-`) && name.endsWith('.receipt.json')).sort().slice(-8)
+    : [];
+  const content = handoffMarkdown({ task: checkpoint.task.id, phase: checkpoint.phase, status: checkpoint.status, branch, head, changedPaths, receipts, usage: checkpoint.lastTokenUsage ?? null, reason, nextAction });
+  writeFileSync(join(runtime, 'HANDOFF.md'), redactSensitive(content), { mode: 0o600 });
+}
 function event(phase, extra = {}) {
   const record = { time: new Date().toISOString(), task: checkpoint?.task?.id ?? null, phase, ...extra };
   const path = join(runtime, 'events.jsonl');
@@ -41,6 +58,7 @@ function transition(phase) {
   const data = backlog(), task = data.tasks.find((t) => t.id === checkpoint.task.id);
   setTaskRow(data, task, phase);
   event(phase);
+  writeHandoff('LIFECYCLE_CHECKPOINT');
 }
 function artifact(name, content) {
   mkdirSync(join(workspace, 'tasks', checkpoint.task.id), { recursive: true });
@@ -56,6 +74,7 @@ function pauseQuota(quota) {
   const data = backlog(), task = data.tasks.find((item) => item.id === checkpoint.task.id);
   setTaskRow(data, task, 'PAUSED_QUOTA');
   event('PAUSED_QUOTA', { retryAt: quota.retryAt });
+  writeHandoff('RESOURCE_EXHAUSTED', quota.retryAt ? `After ${quota.retryAt}, inspect status and use resume; use --quota-ready earlier only after a successful CLI proof.` : 'Verify Antigravity availability, then use resume --quota-ready.');
 }
 function restoreLegacyQuotaArtifact() {
   const path = taskPath(checkpoint.task.id, 'IMPLEMENTATION.md');
@@ -234,29 +253,56 @@ function reviewContext() {
   assertNoSecrets(context, 'review context');
   return context;
 }
-async function agent(kind, phase, prompt, statuses) {
+async function agent(kind, phase, prompt, statuses, transientAttempt = 0) {
   const seq = checkpoint.sequence = (checkpoint.sequence ?? 0) + 1; save();
   const prefix = join(runtime, `${checkpoint.task.id}-${seq}-${phase}`);
   const schemaFile = `${prefix}.schema.json`, resultFile = `${prefix}.result.json`;
   atomicJSON(schemaFile, schema);
   const rules = read(join(root, 'AGENTS.md')).split('# AvenFurniture multi-agent development')[1] ?? '';
   const args = kind === 'antigravity'
-    ? [...config.antigravity, '-p', `Use only the supplied task context. Do not call tools, shell commands, or read/write files. Return structured JSON only. If context is insufficient return BLOCKED.\nTask rules:\n${rules}\n${prompt}`, '--mode', 'plan', '--sandbox', '--output-format', 'json', '--json-schema', schemaFile, '--print-timeout', `${Math.ceil(config.timeoutMs / 1000)}s`]
+    ? [...config.antigravity, '-p', `Use only the supplied task context. Do not call tools, shell commands, or read/write files. Return structured JSON only. If context is insufficient return BLOCKED.\nTask rules:\n${rules}\n${prompt}`, '--mode', 'plan', '--sandbox', '--effort', phase === 'review' ? 'medium' : 'low', '--output-format', 'json', '--json-schema', schemaFile, '--print-timeout', `${Math.ceil(config.timeoutMs / 1000)}s`]
     : [...config.codex, 'exec', '--sandbox', phase === 'commit' ? 'read-only' : 'workspace-write', '-c', 'approval_policy="never"', '-C', root, '--json', '--output-schema', schemaFile, '-o', resultFile, '-'];
   const before = snapshot(root), head = git('rev-parse', 'HEAD'), index = git('write-tree');
   event('CLI_STARTED', { agent: kind, operation: phase, sequence: seq });
   let result;
+  // Antigravity receives the bounded prompt and JSON schema, but no repository
+  // working directory. This prevents workspace discovery from consuming tokens
+  // or prompting for an unavailable headless shell permission.
+  const isolatedCwd = kind === 'antigravity' ? mkdtempSync(join(tmpdir(), 'aven-agy-context-')) : null;
   try {
-    result = await execute(args, { root, timeoutMs: config.timeoutMs, stopFile, log: `${prefix}.log`, input: kind === 'codex' ? `${boundary}\n${prompt}` : undefined,
+    result = await execute(args, { root: isolatedCwd ?? root, timeoutMs: config.timeoutMs, stopFile, log: `${prefix}.log`, input: kind === 'codex' ? `${boundary}\n${prompt}` : undefined, env: agentEnvironment(),
       onChild: (pid) => atomicJSON(join(lock, 'owner.json'), { pid: process.pid, childPid: pid }) });
   } catch (error) {
-    if (kind === 'antigravity') error.quota = quotaFailure(error.output);
+    if (kind === 'antigravity') {
+      error.quota = quotaFailure(error.output);
+      error.context = contextFailure(error.output);
+      if (error.context) error.message = 'Antigravity context limit reached; split or reduce task context before retry';
+    }
     throw error;
+  } finally {
+    if (isolatedCwd) rmSync(isolatedCwd, { recursive: true, force: true });
+  }
+  const usage = agentTokenUsage(kind, result.stdout);
+  if (usage) {
+    checkpoint.lastTokenUsage = { ...usage, agent: kind, operation: phase, sequence: seq };
+    save();
+    if (tokenWarning(usage)) {
+      event('TOKEN_WARNING', { agent: kind, operation: phase, sequence: seq, usage });
+      writeHandoff('TOKEN_USAGE_HIGH', 'Inspect the bounded task context and saved receipts before the next model call; split the task if necessary.');
+    }
   }
   let structured;
   if (kind === 'antigravity') {
     const envelope = JSON.parse(result.stdout);
     if (envelope.status !== 'SUCCESS') {
+      if (transientAttempt === 0 && /stream was interrupted/i.test(String(envelope.error ?? '')) && !envelope.denied_actions?.length && !quotaFailure(result.stdout + result.stderr)) {
+        if (git('rev-parse', 'HEAD') !== head || git('write-tree') !== index) throw new Error('Git changed during failed Antigravity invocation');
+        assertScope(before, snapshot(root), []);
+        event('CLI_TRANSIENT_RETRY', { agent: kind, operation: phase, sequence: seq, retry: 1 });
+        writeHandoff('TRANSIENT_STREAM_ERROR', 'The coordinator will retry this read-only Antigravity turn once after a short delay.');
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        return agent(kind, phase, prompt, statuses, 1);
+      }
       const error = new Error('Antigravity JSON envelope failed; inspect private log');
       error.quota = quotaFailure(`${result.stdout}\n${result.stderr}`);
       throw error;
@@ -274,6 +320,7 @@ async function agent(kind, phase, prompt, statuses) {
   const receipt = { agent: kind, operation: phase, sequence: seq, exitCode: result.code, status: structured.status, result: structured, inputDigest: digest(before), outputDigest: digest(snapshot(root)) };
   atomicJSON(`${prefix}.receipt.json`, receipt);
   event('CLI_COMPLETED', { agent: kind, operation: phase, sequence: seq, status: structured.status });
+  writeHandoff('CLI_COMPLETED');
   if (structured.status === 'BLOCKED') throw new Error(`${kind}: ${structured.summary}`);
   return receipt;
 }
@@ -444,6 +491,7 @@ async function run(resume) {
       }
       await taskLoop();
       checkpoint.status = 'DONE'; save(); event('DONE', { commit: checkpoint.commit, metadataCommit: git('rev-parse', 'HEAD') });
+      writeHandoff('TASK_DONE', 'Task is committed and complete. Inspect the next approved backlog task before another run.');
       if (existsSync(join(workspace, 'release.config.json'))) {
         const { afterCompleted } = await import('./release.mjs');
         const released = afterCompleted(root, checkpoint, config.checks);
@@ -466,6 +514,7 @@ async function run(resume) {
         const data = backlog(), task = data.tasks.find((t) => t.id === checkpoint.task.id); setTaskRow(data, task, 'BLOCKED');
       }
       event(checkpoint.status, { reason: error.message });
+      writeHandoff(error.context ? 'CONTEXT_EXHAUSTED' : checkpoint.status === 'STOPPED' ? 'STOPPED' : 'BLOCKED', error.context ? 'Reduce the approved task context or split the task, obtain review for any scope change, then use the supported recovery path.' : checkpoint.status === 'STOPPED' ? 'Inspect checkpoint and use resume when ready.' : 'Inspect the blocker and obtain the required plan/review before supported recovery.');
     }
     throw error;
   } finally { releaseLock(lock); process.off('SIGINT', stop); process.off('SIGTERM', stop); }
@@ -484,7 +533,7 @@ try {
   else if (action === 'status') {
     const state = existsSync(checkpointPath) ? JSON.parse(read(checkpointPath)) : null;
     const tasks = backlog().tasks;
-    console.log(JSON.stringify({ checkpoint: state ? { task: state.task?.id ?? null, status: state.status, phase: state.phase, round: state.round, error: state.error, quota: state.quota ?? null } : null, next: select()?.id ?? null, paused: tasks.filter((task) => task.status === 'PAUSED_QUOTA').map((task) => task.id), blocked: tasks.filter((task) => task.status !== 'PAUSED_QUOTA' && hasBlocker(task)).map((task) => task.id), lock: existsSync(join(lock, 'owner.json')) ? JSON.parse(read(join(lock, 'owner.json'))) : null, receipts: existsSync(runtime) ? readdirSync(runtime).filter((name) => name.endsWith('.receipt.json')).length : 0 }, null, 2));
+    console.log(JSON.stringify({ checkpoint: state ? { task: state.task?.id ?? null, status: state.status, phase: state.phase, round: state.round, error: state.error, quota: state.quota ?? null, lastTokenUsage: state.lastTokenUsage ?? null } : null, handoff: existsSync(join(runtime, 'HANDOFF.md')) ? '.ai-collab/.runtime/HANDOFF.md' : null, next: select()?.id ?? null, paused: tasks.filter((task) => task.status === 'PAUSED_QUOTA').map((task) => task.id), blocked: tasks.filter((task) => task.status !== 'PAUSED_QUOTA' && hasBlocker(task)).map((task) => task.id), lock: existsSync(join(lock, 'owner.json')) ? JSON.parse(read(join(lock, 'owner.json'))) : null, receipts: existsSync(runtime) ? readdirSync(runtime).filter((name) => name.endsWith('.receipt.json')).length : 0 }, null, 2));
   }
   else if (action === 'stop') { mkdirSync(runtime, { recursive: true }); writeFileSync(stopFile, 'stop\n'); console.log('Stop requested; active child will be terminated and checkpoint preserved.'); }
   else throw new Error('Usage: node .ai-collab/orchestrator.mjs run|resume [--quota-ready]|recover-quota|recover-plan-path|replan|status|stop|doctor|release-status|release-push');

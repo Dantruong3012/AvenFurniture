@@ -15,7 +15,8 @@
     "audit:env": "node --env-file=.env.local scripts/audit-environment.mjs",
     "test:live": "node --env-file=.env.local scripts/test-phase0-live.mjs",
     "test:phase2:live": "node --env-file=.env.local scripts/test-phase2-live.mjs",
-    "auth:config": "node --env-file=.env.local scripts/configure-auth.mjs"
+    "auth:config": "node --env-file=.env.local scripts/configure-auth.mjs",
+    "ai:auto": "node --env-file=.env.local .ai-collab/autopilot.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "0.12.7",

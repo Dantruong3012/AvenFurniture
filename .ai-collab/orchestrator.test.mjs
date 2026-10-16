@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
-import { validateResult, validatePaths, assertScope, snapshot, acquireLock, atomicJSON, execute, quotaFailure } from './orchestrator-core.mjs';
+import { validateResult, validatePaths, assertScope, snapshot, acquireLock, atomicJSON, execute, quotaFailure, contextFailure, agentTokenUsage, tokenWarning, handoffMarkdown } from './orchestrator-core.mjs';
 
 test('classify quota separately from implementation and architecture failures', () => {
   const quota = quotaFailure('AGY_ERROR: RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 30h29m49s.', Date.UTC(2026, 9, 16));
@@ -13,6 +13,22 @@ test('classify quota separately from implementation and architecture failures', 
   assert.equal(quotaFailure('Architecture blocker: transaction needed'), null);
   assert.equal(quotaFailure('Process exited 3; inspect private log'), null);
   assert.equal(quotaFailure('RESOURCE_EXHAUSTED without reset time').retryAt, null);
+});
+test('distinguish context exhaustion, record real CLI usage, and generate a safe handoff', () => {
+  assert.equal(contextFailure('maximum context length exceeded'), true);
+  assert.equal(contextFailure('RESOURCE_EXHAUSTED: Individual quota reached'), false);
+  assert.equal(contextFailure('Architecture blocker: missing transaction'), false);
+  const agy = agentTokenUsage('antigravity', JSON.stringify({ usage: { input_tokens: 35000, output_tokens: 100, total_tokens: 35100 } }));
+  assert.deepEqual(agy, { inputTokens: 35000, outputTokens: 100, totalTokens: 35100 });
+  assert.equal(tokenWarning(agy), 'TOKEN_USAGE_HIGH');
+  assert.deepEqual(agentTokenUsage('codex', JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120 } })), { inputTokens: 100, outputTokens: 20, totalTokens: 120 });
+  assert.equal(tokenWarning({ inputTokens: 100, outputTokens: 20, totalTokens: 120 }), null);
+  assert.equal(agentTokenUsage('antigravity', '{broken'), null);
+  const handoff = handoffMarkdown({ task: 't1', phase: 'PLANNING', status: 'PAUSED_QUOTA', branch: 'dev/test', head: 'abc', changedPaths: ['t1.txt'], receipts: ['t1-1-plan.receipt.json'], usage: agy, reason: 'RESOURCE_EXHAUSTED', nextAction: 'Inspect checkpoint before resume.' });
+  assert.match(handoff, /Task: t1/);
+  assert.match(handoff, /35000 input/);
+  assert.match(handoff, /Inspect checkpoint before resume/);
+  assert.doesNotMatch(handoff, /token value|raw model output copied/);
 });
 
 test('reject false approval, malformed JSON contract, and unsafe owned paths', () => {

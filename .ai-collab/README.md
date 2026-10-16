@@ -1,5 +1,7 @@
 # AvenFurniture multi-agent workflow
 
+For the one-command launcher, read [AUTOPILOT.md](AUTOPILOT.md). The launcher uses this existing coordinator and preserves its checkpoint and review rules.
+
 `AGENTS.md` is the shared policy. Antigravity owns planning/review; Codex owns implementation/tests and requests local commits after approval. The Node coordinator calls the real CLI processes sequentially. No IDE-to-IDE messaging, extra npm dependency, Production deployment, or database migration is part of this runner.
 
 ## Run, monitor, stop, resume
@@ -43,6 +45,8 @@ Each real task has `.ai-collab/tasks/<task-id>/PLAN.md`, `IMPLEMENTATION.md`, an
 The lifecycle is `BACKLOG → PLANNING → READY → IN_PROGRESS → TESTING → READY_FOR_REVIEW → APPROVED → COMMITTED → DONE`; feedback goes through `CHANGES_REQUESTED → IN_PROGRESS`. The runner chooses the highest-priority eligible `READY` task, then an eligible `BACKLOG` task for planning. All dependencies must be `DONE`. It never clears `BLOCKED`, and it stops when there is no eligible work. `NO_ELIGIBLE_TASK` can mean unresolved blockers, not that the whole roadmap is complete.
 
 `STATE.md` is the human-readable pointer. `.runtime/checkpoint.json` stores restart information; `.runtime/events.jsonl` stores handoff events. Raw agent/check logs and receipts are private local files ignored by Git. Do not commit these logs, which may contain tool output or repository context. The `.lock` directory prevents concurrent coordinators; agents and humans must also respect file ownership.
+
+`.runtime/HANDOFF.md` is the private Markdown continuation note. The coordinator updates it at every transition and on token-usage warnings, quota exhaustion, stop, or blocker. It contains bounded metadata and receipt filenames, never raw prompts or credentials. Read it with the checkpoint and actual receipts before using a supported recovery command. Token warnings use reported per-turn usage and conservative thresholds; the CLI does not expose a reliable remaining-quota or remaining-context count.
 
 ## Verification and commits
 

@@ -15,8 +15,12 @@ function fixture(mode = 'success', second = false) {
   writeFileSync(join(dir, 'scenario.json'), JSON.stringify({ mode }));
   writeFileSync(join(dir, 'verify.mjs'), `import {readFileSync,readdirSync} from 'node:fs'; import assert from 'node:assert/strict'; const files=readdirSync('.').filter(p=>/^t[12]\\.txt$/.test(p)); assert.ok(files.length); for(const f of files)assert.equal(readFileSync(f,'utf8'),'verified'); if(JSON.parse(readFileSync('scenario.json')).mode==='fail-check') process.exit(2);`);
   writeFileSync(join(dir, 'fake.mjs'), `import {readFileSync,writeFileSync,existsSync} from 'node:fs';
+import {dirname} from 'node:path'; import {fileURLToPath} from 'node:url';
+const invocationCwd=process.cwd();
+process.chdir(dirname(fileURLToPath(import.meta.url)));
 const args=process.argv.slice(2), mode=JSON.parse(readFileSync('scenario.json')).mode;
 const agy=args.includes('-p'); let prompt=agy?args[args.indexOf('-p')+1]:await new Promise(resolve=>{let s='';process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>resolve(s));});
+if(agy&&invocationCwd===process.cwd())process.exit(9);
 const phase=agy?(prompt.includes('Plan task')?'plan':'review'):(prompt.includes('Request the coordinator')?'commit':'implement');
 const id=(prompt.match(/(?:Plan task|Review task|Implement task) (t[12])/i)||[])[1] || 't1';
 if(agy&&phase==='plan'&&prompt.includes('Repository tracked files'))process.exit(7);
@@ -50,7 +54,8 @@ if(phase==='commit') {
   result.status='COMMIT_REQUESTED'; result.details=prompt.match(/encoding exactly (\\{.*?\\})\\./)[1];
   if(mode==='false-commit')result.details='{"parent":"false","tree":"false","message":"false"}';
 }
-if(agy)console.log(JSON.stringify({status:'SUCCESS',structured_output:result}));else {writeFileSync(args[args.indexOf('-o')+1],JSON.stringify(result));console.log(JSON.stringify({type:'turn.completed'}));}
+if(agy&&['stream-interrupt','stream-always'].includes(mode)&&phase==='review'&&(mode==='stream-always'||!existsSync('.ai-collab/.runtime/stream-interrupted'))){writeFileSync('.ai-collab/.runtime/stream-interrupted','yes');console.log(JSON.stringify({status:'ERROR',error:'The stream was interrupted. Please continue the task you were working on.',structured_output:result,usage:{input_tokens:35000,output_tokens:100,total_tokens:35100}}));process.exit(0);}
+if(agy)console.log(JSON.stringify({status:'SUCCESS',structured_output:result,usage:{input_tokens:35000,output_tokens:100,total_tokens:35100}}));else {writeFileSync(args[args.indexOf('-o')+1],JSON.stringify(result));console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:120,output_tokens:45,total_tokens:165}}));}
 `);
   writeFileSync(join(collab, 'orchestrator.config.json'), JSON.stringify({ antigravity: [process.execPath, join(dir, 'fake.mjs')], codex: [process.execPath, join(dir, 'fake.mjs')], timeoutMs: 10000, maxRounds: 3, checks: [[process.execPath, 'verify.mjs']] }));
   writeFileSync(join(collab, 'BACKLOG.md'), '# Backlog\nRoadmap approval: APPROVED\n\n| Task ID | Priority | Dependencies | Owner | Status | Acceptance criteria | Commit hash |\n| --- | --- | --- | --- | --- | --- | --- |\n| t1 | P0 | - | Codex | READY | Create t1.txt | - |\n'+(second?'| t2 | P0 | t1 | Codex | READY | Create t2.txt | - |\n':''));
@@ -113,7 +118,13 @@ async function waitFor(dir, operation) {
   for(let i=0;i<200;i++) {const path=join(dir,'.ai-collab/.runtime/events.jsonl');if(existsSync(path)&&events(dir).some(e=>e.phase==='CLI_STARTED'&&e.operation===operation)){await new Promise(r=>setTimeout(r,200));return;}await new Promise(r=>setTimeout(r,25));}throw new Error('Missing phase');
 }
 test('two tasks complete with actual Git trees and dependency order',async()=>{
- const dir=fixture('success',true);try {const r=await run(dir);assert.equal(r.code,0,r.output);const done=events(dir).filter(e=>e.phase==='DONE');assert.deepEqual(done.map(e=>e.task),['t1','t2']);assert.equal(spawnSync('git',['rev-list','--count','HEAD'],{cwd:dir,encoding:'utf8'}).stdout.trim(),'5');assert.equal(spawnSync('git',['status','--porcelain'],{cwd:dir,encoding:'utf8'}).stdout,'');}finally{rmSync(dir,{recursive:true});}
+ const dir=fixture('success',true);try {const r=await run(dir);assert.equal(r.code,0,r.output);const done=events(dir).filter(e=>e.phase==='DONE');assert.deepEqual(done.map(e=>e.task),['t1','t2']);assert.equal(spawnSync('git',['rev-list','--count','HEAD'],{cwd:dir,encoding:'utf8'}).stdout.trim(),'5');assert.equal(spawnSync('git',['status','--porcelain'],{cwd:dir,encoding:'utf8'}).stdout,'');const handoff=readFileSync(join(dir,'.ai-collab/.runtime/HANDOFF.md'),'utf8');assert.match(handoff,/Task: t2/);assert.match(handoff,/Reason: TASK_DONE/);assert.ok(events(dir).some(e=>e.phase==='TOKEN_WARNING'));}finally{rmSync(dir,{recursive:true});}
+});
+test('interrupted review envelope is never treated as approval and retries once with a new receipt',async()=>{
+ const dir=fixture('stream-interrupt');try{const r=await run(dir);assert.equal(r.code,0,r.output);const entries=events(dir);assert.equal(entries.filter(e=>e.phase==='CLI_TRANSIENT_RETRY'&&e.operation==='review').length,1);assert.equal(entries.filter(e=>e.phase==='CLI_COMPLETED'&&e.operation==='review').length,1);assert.equal(entries.filter(e=>e.phase==='DONE').length,1);assert.equal(entries.find(e=>e.phase==='CLI_COMPLETED'&&e.operation==='review').sequence,4);}finally{rmSync(dir,{recursive:true});}
+});
+test('repeated interrupted review blocks without a commit or false approval',async()=>{
+ const dir=fixture('stream-always');try{const r=await run(dir);assert.equal(r.code,1);assert.equal(checkpoint(dir).status,'BLOCKED');assert.equal(events(dir).filter(e=>e.phase==='CLI_TRANSIENT_RETRY').length,1);assert.equal(events(dir).filter(e=>e.phase==='DONE').length,0);assert.equal(gitCall(dir,'rev-list','--count','HEAD'),'1');}finally{rmSync(dir,{recursive:true});}
 });
 for(const mode of ['reject-review','fail-check','false-commit','mutate-review'])test(mode+' is BLOCKED without completing a task',async()=>{
  const dir=fixture(mode);try{const r=await run(dir);assert.equal(r.code,1);assert.equal(checkpoint(dir).status,'BLOCKED');assert.equal(events(dir).filter(e=>e.phase==='DONE').length,0);assert.equal(spawnSync('git',['rev-list','--count','HEAD'],{cwd:dir,encoding:'utf8'}).stdout.trim(),'1');if(['reject-review','fail-check'].includes(mode))assert.equal(checkpoint(dir).round,3);}finally{rmSync(dir,{recursive:true});}
@@ -131,6 +142,7 @@ for(const [mode,phase] of [['quota-plan','PLANNING'],['quota-review','READY_FOR_
  const dir=fixture(mode,true);try {
   const first=await run(dir);assert.equal(first.code,1,first.output);
   const paused=checkpoint(dir);assert.equal(paused.status,'PAUSED_QUOTA');assert.equal(paused.phase,phase);
+  const handoff=readFileSync(join(dir,'.ai-collab/.runtime/HANDOFF.md'),'utf8');assert.match(handoff,/Reason: RESOURCE_EXHAUSTED/);assert.match(handoff,/Task: t1/);
   assert.equal(paused.round,phase==='PLANNING'?0:1);
   assert.equal(events(dir).filter(e=>e.phase==='CLI_STARTED'&&e.agent==='antigravity').length,phase==='PLANNING'?1:2);
   assert.equal(events(dir).filter(e=>e.phase==='DONE').length,0);

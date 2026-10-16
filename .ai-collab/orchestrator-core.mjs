@@ -40,6 +40,37 @@ export function quotaFailure(output, observedAt = Date.now()) {
   const seconds = reset ? Number(reset[1] ?? 0) * 3600 + Number(reset[2] ?? 0) * 60 + Number(reset[3] ?? 0) : 0;
   return { kind: 'RESOURCE_EXHAUSTED', observedAt: new Date(observedAt).toISOString(), retryAt: seconds > 0 ? new Date(observedAt + seconds * 1000).toISOString() : null };
 }
+export function contextFailure(output) {
+  if (quotaFailure(output)) return false;
+  return /(?:context window (?:is )?(?:full|exceeded)|maximum context length|context[_ -]?length[_ -]?exceeded|prompt (?:is )?too long|input token limit exceeded|too many tokens for (?:the )?context)/i.test(String(output ?? ''));
+}
+export function agentTokenUsage(kind, output) {
+  let usage;
+  try {
+    if (kind === 'antigravity') usage = JSON.parse(output).usage;
+    else {
+      const entries = output.split('\n').filter(Boolean).map((line) => JSON.parse(line));
+      usage = entries.findLast((entry) => entry.type === 'turn.completed')?.usage;
+    }
+  } catch { return null; }
+  if (!usage || typeof usage !== 'object') return null;
+  const input = usage.input_tokens ?? usage.inputTokens;
+  const outputTokens = usage.output_tokens ?? usage.outputTokens;
+  const total = usage.total_tokens ?? usage.totalTokens ?? (Number(input) + Number(outputTokens));
+  if (![input, outputTokens, total].every((value) => Number.isSafeInteger(value) && value >= 0)) return null;
+  return { inputTokens: input, outputTokens, totalTokens: total };
+}
+export function tokenWarning(usage) {
+  if (!usage) return null;
+  // A conservative per-turn warning, not a provider quota or context-remaining estimate.
+  return usage.inputTokens >= 32000 || usage.outputTokens >= 8000 || usage.totalTokens >= 40000
+    ? 'TOKEN_USAGE_HIGH' : null;
+}
+export function handoffMarkdown({ task, phase, status, branch, head, changedPaths = [], receipts = [], usage = null, reason, nextAction }) {
+  const safe = (value) => String(value ?? '-').replace(/[\r\n|`]/g, ' ').slice(0, 300);
+  const list = (values) => values.length ? values.map((value) => `- ${safe(value)}`).join('\n') : '- None';
+  return `# AvenFurniture agent handoff\n\nGenerated: ${new Date().toISOString()}\nTask: ${safe(task)}\nPhase: ${safe(phase)}\nStatus: ${safe(status)}\nReason: ${safe(reason)}\nBranch: ${safe(branch)}\nHEAD: ${safe(head)}\nToken usage (last completed CLI turn): ${usage ? `${usage.inputTokens} input, ${usage.outputTokens} output, ${usage.totalTokens} total` : 'unavailable'}\n\n## Changed paths\n\n${list(changedPaths)}\n\n## Receipt files\n\n${list(receipts)}\n\n## Safe next action\n\n${safe(nextAction)}\n\nThis is a checkpoint summary, not an approval or a claim that tests passed. Inspect the saved checkpoint and real receipts before resuming. No credentials or raw model output are copied here.\n`;
+}
 export function assertNoSecrets(content, path) {
   if (/sb_secret_[A-Za-z0-9_-]{12,}|sbp_[a-f0-9]{40}|gh[pousr]_[A-Za-z0-9]{20,}|sk-(?:proj-)?[A-Za-z0-9_-]{20,}|sk_live_[A-Za-z0-9_-]{12,}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/i.test(content)) throw new Error(`Potential secret in ${path}; value withheld`);
 }
@@ -77,10 +108,24 @@ export function releaseLock(path) {
   if (existsSync(owner) && JSON.parse(readFileSync(owner, 'utf8')).externalOperation) return;
   rmSync(path, { recursive: true });
 }
-export async function execute(command, { root, timeoutMs, stopFile, log, onChild = () => {}, input } = {}) {
+export function agentEnvironment(source = process.env) {
+  const environment = { ...source };
+  for (const name of Object.keys(environment)) {
+    if (/(?:TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH|ACCESS_KEY|PRIVATE_KEY|API_KEY)/i.test(name) || /^(?:DATABASE_URL|CLOUDINARY_URL|AWS_.*|STRIPE_.*)$/i.test(name)) delete environment[name];
+  }
+  return environment;
+}
+export function redactSensitive(output, source = process.env) {
+  let redacted = String(output);
+  for (const [name, value] of Object.entries(source)) {
+    if (/(?:TOKEN|SECRET|PASSWORD|API_KEY|DATABASE_URL)/i.test(name) && typeof value === 'string' && value.length >= 8) redacted = redacted.replaceAll(value, '[REDACTED]');
+  }
+  return redacted;
+}
+export async function execute(command, { root, timeoutMs, stopFile, log, onChild = () => {}, input, env = process.env } = {}) {
   if (!Array.isArray(command) || !command.length || command.some((arg) => typeof arg !== 'string') || command.some((arg) => /dangerously|danger-full-access/.test(arg))) throw new Error('Invalid or forbidden command');
   return new Promise((resolve, reject) => {
-    const child = spawn(command[0], command.slice(1), { cwd: root, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(command[0], command.slice(1), { cwd: root, detached: true, stdio: ['pipe', 'pipe', 'pipe'], env });
     let output = '', errors = '', reason = '', killTimer;
     const kill = (message) => {
       if (reason) return;
@@ -101,13 +146,13 @@ export async function execute(command, { root, timeoutMs, stopFile, log, onChild
     child.on('error', (error) => { cleanup(); reject(error); });
     child.on('close', (code) => {
       cleanup();
-      if (log) writeFileSync(log, output + '\n--- stderr ---\n' + errors, { mode: 0o600 });
+      if (log) writeFileSync(log, redactSensitive(output + '\n--- stderr ---\n' + errors), { mode: 0o600 });
       if (reason || code !== 0) {
         const error = new Error(reason || `Process exited ${code}; inspect private log`);
-        error.output = output + '\n' + errors;
+        error.output = redactSensitive(output + '\n' + errors);
         return reject(error);
       }
-      resolve({ stdout: output, stderr: errors, code });
+      resolve({ stdout: redactSensitive(output), stderr: redactSensitive(errors), code });
     });
     child.stdin.end(input ?? '');
   });
