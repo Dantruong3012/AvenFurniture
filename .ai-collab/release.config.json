@@ -1,0 +1,10 @@
+{
+  "enabled": false,
+  "releaseMode": "manual",
+  "repository": "Dantruong3012/AvenFurniture",
+  "remote": "origin",
+  "developmentBranch": "dev/aven-autonomous-backlog",
+  "productionBranch": "main",
+  "timeoutMs": 60000,
+  "maxOutgoingCommits": 1000
+}

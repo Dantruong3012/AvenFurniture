@@ -65,11 +65,17 @@ export function acquireLock(path, resume = false) {
     if (!existsSync(ownerPath)) throw new Error('Lock ownership unknown; inspect before recovery');
     const owner = JSON.parse(readFileSync(ownerPath, 'utf8'));
     if (alive(owner.pid) || alive(owner.childPid)) throw new Error('Another coordinator or child is still running');
+    if (owner.externalOperation) throw new Error('Interrupted external Git operation; inspect child processes and remote SHA before operator lock recovery');
     if (!resume) throw new Error('Stale lock found; use resume after inspecting status');
     rmSync(path, { recursive: true });
   }
   mkdirSync(path);
   atomicJSON(join(path, 'owner.json'), { pid: process.pid, childPid: null });
+}
+export function releaseLock(path) {
+  const owner = join(path, 'owner.json');
+  if (existsSync(owner) && JSON.parse(readFileSync(owner, 'utf8')).externalOperation) return;
+  rmSync(path, { recursive: true });
 }
 export async function execute(command, { root, timeoutMs, stopFile, log, onChild = () => {}, input } = {}) {
   if (!Array.isArray(command) || !command.length || command.some((arg) => typeof arg !== 'string') || command.some((arg) => /dangerously|danger-full-access/.test(arg))) throw new Error('Invalid or forbidden command');
