@@ -3,7 +3,7 @@
 Status: READY_FOR_REVIEW
 Changed paths: app/api/inquiries/route.ts, app/cart/page.tsx, app/contact/page.tsx, app/globals.css, components/cart/quote-request-modal.tsx, components/forms/contact-form.tsx, components/product/product-card.tsx, components/product/product-detail-client.tsx, components/product/product-inquiry-modal.tsx, lib/types.ts, tests/storefront-inquiry.test.mjs
 Commit: feat(storefront-inquiry-forms): implement approved task
-Commit hash: -
+Commit hash: a723e2128077abb50481343820c867618a278bdb
 
 Implemented cart quotes, product inquiries, and contact forms with validated API submission and reference confirmations.
 
