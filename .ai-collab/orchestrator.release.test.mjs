@@ -22,6 +22,20 @@ test('secret scanner implementation does not trip its own outgoing scan', () => 
   };
   assert.deepEqual(scanOutgoing('base', 'head', policy, git), { commits: 1, blobs: 1 });
 });
+for (const scenario of ['existing-fixture', 'wrong-path', 'arbitrary-secret']) test(`fixture exemption is exact: ${scenario}`, () => {
+  const path = scenario === 'wrong-path' ? 'application.js' : 'tests/supabase-config.test.mjs';
+  const content = scenario === 'arbitrary-secret' ? 'sb_secret_' + 'x'.repeat(32) : readFileSync(new URL('../tests/supabase-config.test.mjs', import.meta.url), 'utf8');
+  const oid = 'a'.repeat(40);
+  const git = (...args) => {
+    if (args[0] === 'rev-list') return oid;
+    if (args[0] === 'ls-tree') return `100644 blob ${oid}\t${path}\0`;
+    if (args[1] === '-s') return String(Buffer.byteLength(content));
+    if (args[1] === '-p') return content;
+    throw new Error('Unexpected scanner operation');
+  };
+  if (scenario === 'existing-fixture') assert.deepEqual(scanOutgoing('base', 'head', policy, git), { commits: 1, blobs: 1 });
+  else assert.throws(() => scanOutgoing('base', 'head', policy, git), /Potential secret/);
+});
 function fixture() {
   const dir = mkdtempSync(join(tmpdir(), 'aven-release-test-'));
   const root = join(dir, 'work'), remote = join(dir, 'remote.git'); mkdirSync(root);

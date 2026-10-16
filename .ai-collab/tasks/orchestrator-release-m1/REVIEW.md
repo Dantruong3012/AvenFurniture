@@ -30,3 +30,14 @@ Receipt SHA-256: `9054aeb37db0d74ff5238943faefdf5922aaeaa847366f904efff3e2200d83
 - `.ai-collab/release/DESIGN.md`: `5024fb567ca380927f2c84e9d42db9883e56bc1bf83636de65149d279f66b389`
 - `.ai-collab/release/OPERATIONS.md`: `d736bca1db58f509b07ad6bd7b474950bce932bddfd713aaa09d90e5da786117`
 - `.ai-collab/tasks/orchestrator-release-m1/IMPLEMENTATION.md`: `162d74d9056dc715176755cb5510dc27de6eb5517c66ceea6630755c9a342d7f`
+
+## Supplemental review round 3 — APPROVED
+
+Reviewer: Antigravity CLI. Actual SUCCESS JSON envelope and exit code 0. The reviewer approved the exact existing-fixture correction, path-restricted exemption and three regression cases after assessing the reported 59 passing orchestrator tests and full historical scan. This paragraph summarizes the raw review; the complete response is preserved privately, including its test-literal examples. M1 only; no live push or release authorization. The following current hashes supersede their earlier manifest entries for this forward fix.
+
+Private receipt: `.ai-collab/.runtime/release-m1-review/round-3-stdout.json`
+Receipt SHA-256: `5f4c9c0d910cd225316f80c4a44e0368fc3c16cdc961cabdaace87e532315202`
+
+- `.ai-collab/release-git.mjs`: `7c1b8c8caed35019b59d103426994bb215b42263032cd25aea9cb4158bd8b8a5`
+- `.ai-collab/orchestrator.release.test.mjs`: `0d380271c3b24f2f230e52e889e2960cf3690dfa8b6c4778364deed06b82e8af`
+- `.ai-collab/tasks/orchestrator-release-m1/IMPLEMENTATION.md`: `6750f95ea1bafe8233322b68528ee91e9e42e4a2a7e9d3de162beb8aa8e34174`

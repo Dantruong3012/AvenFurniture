@@ -81,7 +81,7 @@ export function scanOutgoing(base, sha, config, git) {
       if (Number(git('cat-file', '-s', oid)) > 5 * 1024 * 1024) throw new Error(`Outgoing blob exceeds scan limit: ${path}`);
       let content = git('cat-file', '-p', oid);
       // The sole existing non-secret test literal is explicitly scoped; arbitrary fixture labels are not exempted.
-      if (path === 'tests/supabase-config.test.mjs') content = content.replaceAll('sb_secret_' + 'test_fixture_only', 'TEST_FIXTURE');
+      if (path === 'tests/supabase-config.test.mjs') content = content.replaceAll('sb_secret_' + 'fixture_only', 'TEST_FIXTURE');
       assertNoSecrets(content, path);
       if (/github_pat_[A-Za-z0-9_]{30,}|AKIA[A-Z0-9]{16}|(?:postgres(?:ql)?|https?):\/\/[^\s/:]+:[^\s@]+@|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/.test(content)) throw new Error(`Potential credential in ${path}; value withheld`);
     }

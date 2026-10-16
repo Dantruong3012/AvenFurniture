@@ -1,6 +1,6 @@
 # Implementation: orchestrator-release-m1
 
-Status: COMMITTED
+Status: READY_FOR_REVIEW
 Implementer: Codex
 Date: 2026-10-16
 
@@ -30,7 +30,7 @@ Pre-existing BACKLOG.md, STATE.md, admin-inquiry-portal artifacts and its BLOCKE
 
 ## Actual verification
 
-- `node --test .ai-collab/orchestrator*.test.mjs`: PASS, 56 tests, 0 failures/skips.
+- `node --test .ai-collab/orchestrator*.test.mjs`: PASS, 59 tests, 0 failures/skips.
 - `npm run lint`: PASS.
 - `npm run typecheck`: PASS.
 - `npm test`: PASS, 71 tests, 0 failures/skips.
@@ -55,3 +55,7 @@ Branch: `dev/aven-release-m1`
 Isolated worktree: `/private/tmp/aven-release-m1`
 
 Only the reviewed M1 code/docs and actual review artifact were committed. This metadata update records that commit; it does not change reviewed runner code. No push. The main checkout stays on `dev/aven-autonomous-backlog` at faab317 with its original dirty task metadata and BLOCKED checkpoint. Its BACKLOG.md and STATE.md were not staged, committed or updated by M1. M1 is not integrated into that checkpoint baseline; resolve the admin plan and separately reviewed runner adoption before activating. No overall release DONE/DEPLOYED claim.
+
+## Post-commit fixture correction (awaiting supplemental review)
+
+Scanning the full two-commit M1 history exposed a mistaken fixture name in the exact scanner exemption. It has been corrected to the existing fake value by concatenating its prefix and suffix in scanner source; no credential is involved. Three new regression cases prove the actual repository fixture is accepted, the same content in another path is rejected, and an arbitrary secret in the fixture path is rejected. The corrected scanner successfully inspected 2 actual commits / 179 unique path+blob combinations locally. Orchestrator suite now passes 59/59 tests; lint and diff checks pass. Application code is unchanged from the passing 71-test/typecheck/build evidence. No live push.
