@@ -40,6 +40,24 @@ test('agent quota proof prevents repeated smoke until reset or explicit verifica
   assert.equal(assessAgentQuota({ ...receipt, retryAt: null }).status, 'PAUSED_QUOTA');
   assert.equal(assessAgentQuota({ ...receipt, retryAt: new Date(Date.now() - 1000).toISOString() }), null);
 });
+test('newer real smoke for exact runner digest supersedes old quota receipt without deleting it', () => {
+  const now = Date.parse('2026-10-16T12:00:00.000Z');
+  const receipt = { kind: 'RESOURCE_EXHAUSTED', observedAt: '2026-10-16T10:00:00.000Z', retryAt: '2026-10-17T10:00:00.000Z' };
+  const proof = { realCliFixture: true, runnerDigest: 'exact', verifiedAt: '2026-10-16T11:00:00.000Z' };
+  assert.equal(assessAgentQuota(receipt, false, now, proof, 'exact'), null);
+  assert.equal(assessAgentQuota(receipt, false, now, proof, 'changed').status, 'PAUSED_QUOTA');
+  assert.equal(assessAgentQuota(receipt, false, now, { ...proof, realCliFixture: false }, 'exact').status, 'PAUSED_QUOTA');
+  assert.equal(assessAgentQuota(receipt, false, now, { ...proof, verifiedAt: 'invalid' }, 'exact').status, 'PAUSED_QUOTA');
+  assert.equal(assessAgentQuota({ ...receipt, observedAt: null }, false, now, proof, 'exact').status, 'PAUSED_QUOTA');
+  assert.equal(assessAgentQuota(receipt, false, now, { ...proof, verifiedAt: '2026-10-16T13:00:00.000Z' }, 'exact').status, 'PAUSED_QUOTA');
+});
+test('new 429 after successful smoke pauses the same runner again', () => {
+  const now = Date.parse('2026-10-16T13:00:00.000Z');
+  const proof = { realCliFixture: true, runnerDigest: 'exact', verifiedAt: '2026-10-16T11:00:00.000Z' };
+  const newerQuota = { kind: 'RESOURCE_EXHAUSTED', observedAt: '2026-10-16T12:00:00.000Z', retryAt: '2026-10-17T12:00:00.000Z' };
+  assert.equal(assessAgentQuota(newerQuota, false, now, proof, 'exact').status, 'PAUSED_QUOTA');
+  assert.equal(assessAgentQuota({ ...newerQuota, observedAt: proof.verifiedAt }, false, now, proof, 'exact').status, 'PAUSED_QUOTA');
+});
 test('provider preflight uses read-only GETs, reports exact projects, and never returns tokens', async () => {
   const requests = [];
   const config = { repository: 'Example/Repo', productionBranch: 'main', vercelProjectId: 'prj_exact', vercelTeamId: 'team_exact', supabaseProjectRef: 'refexact' };

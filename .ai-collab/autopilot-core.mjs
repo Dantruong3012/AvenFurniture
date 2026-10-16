@@ -51,10 +51,16 @@ export function inspectLocal(root, queue, config) {
   const assessment = assessQueue({ checkpoint, tasks: queue.tasks, blockedArtifacts, branch, expectedBranch: config.developmentBranch, remoteMatches, credentialFileRisk, dirty, locked: existsSync(join(root, '.ai-collab/.lock')), roadmapApproved: /^Roadmap approval: APPROVED$/m.test(queue.content) });
   return { branch, head, remoteMatches, credentialFileRisk, dirty, worktrees, checkpoint: checkpoint ? { task: checkpoint.task?.id ?? null, status: checkpoint.status, phase: checkpoint.phase } : null, ...assessment };
 }
-export function assessAgentQuota(receipt, quotaReady = false, now = Date.now()) {
+export function assessAgentQuota(receipt, quotaReady = false, now = Date.now(), smokeProof = null, runnerDigest = null) {
   if (!receipt || receipt.kind !== 'RESOURCE_EXHAUSTED') return null;
   const reset = receipt.retryAt ? Date.parse(receipt.retryAt) : NaN;
   if (quotaReady || Number.isFinite(reset) && now >= reset) return null;
+  const observed = receipt.observedAt ? Date.parse(receipt.observedAt) : NaN;
+  const verified = smokeProof?.verifiedAt ? Date.parse(smokeProof.verifiedAt) : NaN;
+  if (smokeProof?.realCliFixture === true && smokeProof.runnerDigest === runnerDigest &&
+    typeof runnerDigest === 'string' && runnerDigest.length > 0 &&
+    Number.isFinite(observed) && Number.isFinite(verified) &&
+    verified > observed && verified <= now) return null;
   return { status: 'PAUSED_QUOTA', retryAt: Number.isFinite(reset) ? receipt.retryAt : null };
 }
 async function getJson(url, token, fetcher, attempts = 3) {

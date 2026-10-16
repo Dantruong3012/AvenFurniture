@@ -20,7 +20,13 @@ const runnerFiles = ['autopilot.mjs', 'autopilot-core.mjs', 'orchestrator.mjs', 
 const runnerDigest = () => createHash('sha256').update(runnerFiles.map((name) => readFileSync(join(workspace, name))).reduce((all, file) => Buffer.concat([all, file]), Buffer.alloc(0))).digest('hex');
 const smokeVerified = () => existsSync(smokeReceipt) && JSON.parse(readFileSync(smokeReceipt, 'utf8')).runnerDigest === runnerDigest();
 const smokeFailed = () => !smokeVerified() && existsSync(failedSmokeReceipt) && JSON.parse(readFileSync(failedSmokeReceipt, 'utf8')).runnerDigest === runnerDigest();
-const quota = () => existsSync(quotaReceipt) ? assessAgentQuota(JSON.parse(readFileSync(quotaReceipt, 'utf8')), process.argv.includes('--quota-ready')) : null;
+const quota = () => existsSync(quotaReceipt) ? assessAgentQuota(
+  JSON.parse(readFileSync(quotaReceipt, 'utf8')),
+  process.argv.includes('--quota-ready'),
+  Date.now(),
+  existsSync(smokeReceipt) ? JSON.parse(readFileSync(smokeReceipt, 'utf8')) : null,
+  runnerDigest(),
+) : null;
 const runChild = (file, args, env = process.env, capture = false) => new Promise((resolve, reject) => {
   const child = spawn(process.execPath, [file, ...args], { cwd: root, env, stdio: capture ? ['ignore', 'pipe', 'pipe'] : 'inherit' });
   let output = '';
