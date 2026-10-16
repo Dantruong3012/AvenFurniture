@@ -1,6 +1,6 @@
 # Release operations and configuration
 
-Implementation stage: M1 committed; M2 Preview adapter is under implementation and review. Release automation remains disabled.
+Implementation stage: M1 and M2 committed. Release automation remains disabled; the old Preview is failed and no new Preview has been proven READY.
 
 ## Read-only status
 

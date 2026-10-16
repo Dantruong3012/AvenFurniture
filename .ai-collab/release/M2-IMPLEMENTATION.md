@@ -1,8 +1,9 @@
 # M2 Preview tracking implementation
 
-Status: READY_FOR_REVIEW
+Status: DONE
 Author: Codex
 Date: 2026-10-16
+Implementation commit: `4e9dc68`
 
 ## Implemented in isolated worktree
 
