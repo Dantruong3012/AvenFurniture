@@ -10,7 +10,7 @@ const source = dirname(fileURLToPath(import.meta.url));
 function fixture(mode = 'success', second = false) {
   const dir = mkdtempSync(join(tmpdir(), 'aven-runner-test-'));
   const collab = join(dir, '.ai-collab'); mkdirSync(collab);
-  for (const name of ['workflow.mjs', 'orchestrator.mjs', 'orchestrator-core.mjs', '.gitignore']) copyFileSync(join(source, name), join(collab, name));
+  for (const name of ['workflow.mjs', 'orchestrator.mjs', 'orchestrator-core.mjs', 'release.mjs', 'release-git.mjs', 'release.config.json', '.gitignore']) copyFileSync(join(source, name), join(collab, name));
   writeFileSync(join(dir, 'AGENTS.md'), 'Isolated deterministic coordinator test.');
   writeFileSync(join(dir, 'scenario.json'), JSON.stringify({ mode }));
   writeFileSync(join(dir, 'verify.mjs'), `import {readFileSync,readdirSync} from 'node:fs'; import assert from 'node:assert/strict'; const files=readdirSync('.').filter(p=>/^t[12]\\.txt$/.test(p)); assert.ok(files.length); for(const f of files)assert.equal(readFileSync(f,'utf8'),'verified'); if(JSON.parse(readFileSync('scenario.json')).mode==='fail-check') process.exit(2);`);
@@ -63,6 +63,22 @@ function run(dir, action='run', ...args) {
   return new Promise(resolve=>{const child=spawn(process.execPath,['.ai-collab/orchestrator.mjs',action,...args],{cwd:dir});let output='';child.stdout.on('data',c=>output+=c);child.stderr.on('data',c=>output+=c);child.on('close',code=>resolve({code,output}));});
 }
 function gitCall(dir,...args){const result=spawnSync('git',args,{cwd:dir,encoding:'utf8'});assert.equal(result.status,0,result.stderr);return result.stdout.trim();}
+test('release module failure preserves completed development checkpoint and artifacts', async () => {
+  const dir = fixture();
+  try {
+    writeFileSync(join(dir, '.ai-collab/release.mjs'), 'throw new Error("fixture release load failure");\n');
+    gitCall(dir, 'add', '.ai-collab/release.mjs');
+    gitCall(dir, 'commit', '-qm', 'fixture failing release module');
+    const result = await run(dir);
+    assert.equal(result.code, 1);
+    assert.match(result.output, /fixture release load failure/);
+    const c = JSON.parse(readFileSync(join(dir, '.ai-collab/.runtime/checkpoint.json'), 'utf8'));
+    assert.equal(c.status, 'DONE');
+    assert.equal(c.phase, 'COMMITTED');
+    assert.equal(gitCall(dir, 'status', '--porcelain'), '');
+    assert.match(readFileSync(join(dir, '.ai-collab/BACKLOG.md'), 'utf8'), /DONE/);
+  } finally { rmSync(dir, { recursive: true }); }
+});
 function reviewedUpgrade(dir,status='APPROVED'){
  const review=join(dir,'.ai-collab/tasks/orchestrator-quota-recovery/REVIEW.md');mkdirSync(dirname(review),{recursive:true});
  writeFileSync(review,`# Review: orchestrator-quota-recovery\n\nStatus: ${status}\nReviewer: Antigravity\n\nReviewed runner change.\n`);

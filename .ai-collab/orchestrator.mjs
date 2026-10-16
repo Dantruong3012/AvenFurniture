@@ -2,7 +2,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { root, workspace, backlog, nextTask, hasBlocker, field, replaceField, setTaskRow, taskPath, changedWorkingPaths, scanStaged, git } from './workflow.mjs';
-import { schema, validateResult, atomicJSON, snapshot, digest, changes, assertScope, validatePaths, acquireLock, execute, assertNoSecrets, quotaFailure } from './orchestrator-core.mjs';
+import { schema, validateResult, atomicJSON, snapshot, digest, changes, assertScope, validatePaths, acquireLock, releaseLock, execute, assertNoSecrets, quotaFailure } from './orchestrator-core.mjs';
 
 const runtime = join(workspace, '.runtime');
 const checkpointPath = join(runtime, 'checkpoint.json');
@@ -444,11 +444,17 @@ async function run(resume) {
       }
       await taskLoop();
       checkpoint.status = 'DONE'; save(); event('DONE', { commit: checkpoint.commit, metadataCommit: git('rev-parse', 'HEAD') });
+      if (existsSync(join(workspace, 'release.config.json'))) {
+        const { afterCompleted } = await import('./release.mjs');
+        const released = afterCompleted(root, checkpoint, config.checks);
+        event('RELEASE_HANDOFF', released);
+        if (!released.ok) { process.exitCode = 1; return; } // Preserve the completed development checkpoint.
+      }
       if (quotaResume) { event('QUOTA_RECOVERY_TASK_DONE'); return; }
       // Continue the next eligible task without an IDE-to-IDE message.
     }
   } catch (error) {
-    if (checkpoint?.task && !['BLOCKED', 'PAUSED_QUOTA'].includes(checkpoint.status)) {
+    if (checkpoint?.task && !['BLOCKED', 'PAUSED_QUOTA', 'DONE'].includes(checkpoint.status)) {
       if (error.quota) {
         pauseQuota(error.quota);
         throw new Error(error.quota.retryAt ? `Antigravity quota exhausted; paused until ${error.quota.retryAt}` : 'Antigravity quota exhausted; paused until availability is confirmed');
@@ -462,7 +468,7 @@ async function run(resume) {
       event(checkpoint.status, { reason: error.message });
     }
     throw error;
-  } finally { rmSync(lock, { recursive: true }); process.off('SIGINT', stop); process.off('SIGTERM', stop); }
+  } finally { releaseLock(lock); process.off('SIGINT', stop); process.off('SIGTERM', stop); }
 }
 
 const action = process.argv[2];
@@ -471,11 +477,15 @@ try {
   else if (action === 'recover-quota') recoverQuota();
   else if (action === 'recover-plan-path') recoverPlanPath();
   else if (action === 'replan') replan();
+  else if (['release-status', 'release-push', 'doctor'].includes(action)) {
+    const { releaseCommand } = await import('./release.mjs');
+    releaseCommand(root, action);
+  }
   else if (action === 'status') {
     const state = existsSync(checkpointPath) ? JSON.parse(read(checkpointPath)) : null;
     const tasks = backlog().tasks;
     console.log(JSON.stringify({ checkpoint: state ? { task: state.task?.id ?? null, status: state.status, phase: state.phase, round: state.round, error: state.error, quota: state.quota ?? null } : null, next: select()?.id ?? null, paused: tasks.filter((task) => task.status === 'PAUSED_QUOTA').map((task) => task.id), blocked: tasks.filter((task) => task.status !== 'PAUSED_QUOTA' && hasBlocker(task)).map((task) => task.id), lock: existsSync(join(lock, 'owner.json')) ? JSON.parse(read(join(lock, 'owner.json'))) : null, receipts: existsSync(runtime) ? readdirSync(runtime).filter((name) => name.endsWith('.receipt.json')).length : 0 }, null, 2));
   }
   else if (action === 'stop') { mkdirSync(runtime, { recursive: true }); writeFileSync(stopFile, 'stop\n'); console.log('Stop requested; active child will be terminated and checkpoint preserved.'); }
-  else throw new Error('Usage: node .ai-collab/orchestrator.mjs run|resume [--quota-ready]|recover-quota|recover-plan-path|replan|status|stop');
+  else throw new Error('Usage: node .ai-collab/orchestrator.mjs run|resume [--quota-ready]|recover-quota|recover-plan-path|replan|status|stop|doctor|release-status|release-push');
 } catch (error) { console.error(`Orchestrator stopped: ${error.message}`); process.exitCode = 1; }
