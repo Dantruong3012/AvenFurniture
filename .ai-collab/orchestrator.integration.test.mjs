@@ -22,6 +22,7 @@ const id=(prompt.match(/(?:Plan task|Review task|Implement task) (t[12])/i)||[])
 if(agy&&phase==='plan'&&prompt.includes('Repository tracked files'))process.exit(7);
 if(agy&&phase==='review'&&(!prompt.includes('NEW FILES')||!prompt.includes('verified')||prompt.includes('CURRENT FILES')))process.exit(7);
 const result={status:'READY',summary:'Fixture evidence',paths:[id+'.txt'],details:'Implement the exact proof file.'};
+if(agy&&phase==='plan'&&mode==='unsafe-plan-artifact')result.paths.push('.ai-collab/tasks/'+id+'/IMPLEMENTATION.md');
 if(phase==='implement') {
   if(mode==='stop-resume'&&!existsSync('.ai-collab/.runtime/delayed')){writeFileSync('.ai-collab/.runtime/delayed','yes');await new Promise(r=>setTimeout(r,2500));}
   writeFileSync(id+'.txt','verified'); result.status='READY_FOR_REVIEW';
@@ -57,6 +58,12 @@ function reviewedUpgrade(dir,status='APPROVED'){
  const review=join(dir,'.ai-collab/tasks/orchestrator-quota-recovery/REVIEW.md');mkdirSync(dirname(review),{recursive:true});
  writeFileSync(review,`# Review: orchestrator-quota-recovery\n\nStatus: ${status}\nReviewer: Antigravity\n\nReviewed runner change.\n`);
  const docs=join(dir,'AGENTS.md');writeFileSync(docs,readFileSync(docs,'utf8')+'\nRunner instructions updated.\n');
+ return review;
+}
+function reviewedPlanRecovery(dir,status='APPROVED'){
+ const review=join(dir,'.ai-collab/tasks/orchestrator-plan-path-recovery/REVIEW.md');mkdirSync(dirname(review),{recursive:true});
+ writeFileSync(review,`# Review: orchestrator-plan-path-recovery\n\nStatus: ${status}\nReviewer: Antigravity\n\nReviewed Planning contract and recovery.\n`);
+ const runner=join(dir,'.ai-collab/orchestrator.mjs');writeFileSync(runner,readFileSync(runner,'utf8')+'\n// reviewed fixture change\n');
  return review;
 }
 function checkpoint(dir) {return JSON.parse(readFileSync(join(dir,'.ai-collab/.runtime/checkpoint.json')));}
@@ -176,6 +183,60 @@ test('runner upgrade requires committed APPROVED review; rejected review preserv
   const result=await run(dir,'resume','--quota-ready');assert.equal(result.code,1);assert.match(result.output,/review is not APPROVED/);
   assert.equal(readFileSync(path,'utf8'),saved);
   assert.equal(events(dir).filter(e=>e.phase==='CLI_STARTED').length,before);
+ }finally{rmSync(dir,{recursive:true});}
+});
+test('Planning contract excludes lifecycle artifacts and preserves strict validation',async()=>{
+ const dir=fixture('unsafe-plan-artifact');try {
+  const failed=await run(dir);assert.equal(failed.code,1,failed.output);
+  assert.match(failed.output,/Unsafe plan path/);
+  const saved=checkpoint(dir);assert.equal(saved.status,'BLOCKED');assert.equal(saved.phase,'PLANNING');
+  const receipt=JSON.parse(readFileSync(join(dir,'.ai-collab/.runtime/t1-1-plan.receipt.json'),'utf8'));
+  assert.deepEqual(receipt.result.paths,['t1.txt','.ai-collab/tasks/t1/IMPLEMENTATION.md']);
+  assert.match(readFileSync(join(dir,'.ai-collab/orchestrator.mjs'),'utf8'),/Never include any \.ai-collab\/ path/);
+  assert.equal((await run(dir,'resume')).code,1);
+  assert.equal(checkpoint(dir).status,'BLOCKED');
+ }finally{rmSync(dir,{recursive:true});}
+});
+test('reviewed Planning recovery adopts saved receipt and can resume without repeating plan',async()=>{
+ const dir=fixture('unsafe-plan-artifact');try {
+  const existingPlan='# Plan: t1\n\nStatus: APPROVED\n\nOriginal approved details.\n';
+  writeFileSync(join(dir,'.ai-collab/tasks/t1/PLAN.md'),existingPlan);
+  gitCall(dir,'add','.ai-collab/tasks/t1/PLAN.md');gitCall(dir,'commit','-qm','docs: record approved fixture plan');
+  assert.equal((await run(dir)).code,1);
+  const savedReceipt=readFileSync(join(dir,'.ai-collab/.runtime/t1-1-plan.receipt.json'),'utf8');
+  reviewedPlanRecovery(dir);
+  const beforeCommit=readFileSync(join(dir,'.ai-collab/.runtime/checkpoint.json'),'utf8');
+  assert.equal((await run(dir,'recover-plan-path')).code,1);
+  assert.equal(readFileSync(join(dir,'.ai-collab/.runtime/checkpoint.json'),'utf8'),beforeCommit);
+  gitCall(dir,'add','.ai-collab/orchestrator.mjs','.ai-collab/tasks/orchestrator-plan-path-recovery/REVIEW.md');
+  gitCall(dir,'commit','-qm','fix(orchestrator): review planning recovery');
+  const recovered=await run(dir,'recover-plan-path');assert.equal(recovered.code,0,recovered.output);
+  assert.equal(checkpoint(dir).phase,'READY');assert.deepEqual(checkpoint(dir).paths,['t1.txt']);
+  assert.equal(checkpoint(dir).planReceipt.result.status,'READY');
+  assert.equal(readFileSync(join(dir,'.ai-collab/tasks/t1/PLAN.md'),'utf8'),existingPlan);
+  assert.equal(readFileSync(join(dir,'.ai-collab/.runtime/t1-1-plan.receipt.json'),'utf8'),savedReceipt);
+  assert.ok(existsSync(join(dir,'.ai-collab/.runtime/t1-1-blocked-implementation.md')));
+  assert.equal(readFileSync(join(dir,'.ai-collab/tasks/t1/IMPLEMENTATION.md'),'utf8'),'# Implementation: t1\n\nStatus: NOT_STARTED\n');
+  assert.equal((await run(dir,'recover-plan-path')).code,1);
+  const resumed=await run(dir,'resume');assert.equal(resumed.code,0,resumed.output);
+  assert.equal(events(dir).filter(e=>e.phase==='CLI_STARTED'&&e.operation==='plan').length,1);
+  assert.deepEqual(events(dir).filter(e=>e.phase==='DONE').map(e=>e.task),['t1']);
+ }finally{rmSync(dir,{recursive:true});}
+});
+for(const mode of ['unapproved','committed-source','dirty-source','modified-artifact'])test('Planning recovery rejects '+mode+' without changing checkpoint',async()=>{
+ const dir=fixture('unsafe-plan-artifact');try {
+  assert.equal((await run(dir)).code,1);
+  reviewedPlanRecovery(dir,mode==='unapproved'?'CHANGES_REQUESTED':'APPROVED');
+  if(mode==='committed-source')writeFileSync(join(dir,'app.js'),'unexpected source\n');
+  gitCall(dir,'add','.ai-collab/orchestrator.mjs','.ai-collab/tasks/orchestrator-plan-path-recovery/REVIEW.md');
+  if(mode==='committed-source')gitCall(dir,'add','app.js');
+  gitCall(dir,'commit','-qm','fix(orchestrator): candidate recovery');
+  if(mode==='dirty-source')writeFileSync(join(dir,'app.js'),'unexpected dirty source\n');
+  if(mode==='modified-artifact')writeFileSync(join(dir,'.ai-collab/tasks/t1/IMPLEMENTATION.md'),'Status: BLOCKED\nManual blocker\n');
+  const path=join(dir,'.ai-collab/.runtime/checkpoint.json'),saved=readFileSync(path,'utf8');
+  const result=await run(dir,'recover-plan-path');assert.equal(result.code,1,result.output);
+  assert.equal(readFileSync(path,'utf8'),saved);
+  assert.ok(!existsSync(join(dir,'.ai-collab/.runtime/t1-1-blocked-implementation.md')));
  }finally{rmSync(dir,{recursive:true});}
 });
 for(const extra of ['backlog-state','application-commit','application-dirty'])test('runner adoption rejects '+extra+' without altering checkpoint',async()=>{

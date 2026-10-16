@@ -7,7 +7,7 @@ export const schema = {
   type: 'object', additionalProperties: false,
   properties: {
     status: { type: 'string', enum: ['READY', 'READY_FOR_REVIEW', 'APPROVED', 'CHANGES_REQUESTED', 'COMMIT_REQUESTED', 'BLOCKED'] },
-    summary: { type: 'string' }, paths: { type: 'array', items: { type: 'string' } }, details: { type: 'string' },
+    summary: { type: 'string' }, paths: { type: 'array', description: 'For Planning, exact application source, test, and local migration paths only. Lifecycle artifacts under .ai-collab/ are coordinator-owned and must be omitted.', items: { type: 'string' } }, details: { type: 'string' },
   }, required: ['status', 'summary', 'paths', 'details'],
 };
 export function validateResult(value, allowed) {

@@ -18,6 +18,8 @@ for (const name of ['antigravity', 'codex', 'checks']) {
 const read = (path) => readFileSync(path, 'utf8');
 const runnerReviewPath = '.ai-collab/tasks/orchestrator-quota-recovery/REVIEW.md';
 const runnerUpgradePaths = new Set(['.ai-collab/orchestrator.mjs', '.ai-collab/orchestrator-core.mjs', '.ai-collab/workflow.mjs', '.ai-collab/orchestrator.integration.test.mjs', '.ai-collab/orchestrator.test.mjs', '.ai-collab/README.md', '.ai-collab/tasks/orchestrator-quota-recovery/IMPLEMENTATION.md', runnerReviewPath, 'AGENTS.md']);
+const planRecoveryReviewPath = '.ai-collab/tasks/orchestrator-plan-path-recovery/REVIEW.md';
+const planRecoveryPaths = new Set(['.ai-collab/orchestrator.mjs', '.ai-collab/orchestrator-core.mjs', '.ai-collab/orchestrator.integration.test.mjs', '.ai-collab/orchestrator.test.mjs', '.ai-collab/README.md', '.ai-collab/tasks/orchestrator-plan-path-recovery/IMPLEMENTATION.md', planRecoveryReviewPath]);
 let checkpoint;
 const save = () => atomicJSON(checkpointPath, checkpoint);
 function event(phase, extra = {}) {
@@ -97,6 +99,56 @@ function adoptReviewedRunner() {
   const sourceChanged = changes(checkpoint.baseline, current).filter((path) => !metadata.has(path));
   if (sourceChanged.some((path) => !runnerUpgradePaths.has(path))) throw new Error('Task source changed since quota checkpoint');
   return { baseHead: head, baseline: current, runnerUpgrade: { from: checkpoint.baseHead, to: head, paths: committed } };
+}
+function recoverPlanPath() {
+  acquireLock(lock, true);
+  try {
+    if (!existsSync(checkpointPath)) throw new Error('No checkpoint to recover');
+    checkpoint = JSON.parse(read(checkpointPath));
+    const id = checkpoint.task?.id;
+    const artifactPath = `.ai-collab/tasks/${id}/IMPLEMENTATION.md`;
+    if (checkpoint.status !== 'BLOCKED' || checkpoint.phase !== 'PLANNING' || checkpoint.round !== 0 || checkpoint.error !== `Unsafe plan path: ${artifactPath}` || !checkpoint.sequence || checkpoint.planReceipt || checkpoint.paths?.length) throw new Error('Checkpoint is not the known Planning artifact-path failure');
+    if (checkpoint.configDigest !== configDigest) throw new Error('Configuration changed since checkpoint');
+    const receiptPath = join(runtime, `${id}-${checkpoint.sequence}-plan.receipt.json`);
+    if (!existsSync(receiptPath)) throw new Error('Missing saved Planning receipt');
+    const receipt = JSON.parse(read(receiptPath));
+    if (receipt.agent !== 'antigravity' || receipt.operation !== 'plan' || receipt.sequence !== checkpoint.sequence || receipt.exitCode !== 0 || receipt.status !== 'READY' || receipt.result?.status !== 'READY' || !receipt.inputDigest || receipt.outputDigest !== receipt.inputDigest) throw new Error('Planning receipt is not a successful read-only invocation');
+    validateResult(receipt.result, ['READY']);
+    const originalPaths = receipt.result.paths;
+    if (originalPaths.filter((path) => path === artifactPath).length !== 1) throw new Error('Planning receipt does not contain the exact lifecycle artifact');
+    const paths = validatePaths(originalPaths.filter((path) => path !== artifactPath));
+    const blockedArtifact = `# Implementation: ${id}\n\nStatus: BLOCKED\n\n${checkpoint.error}\n\nSee local checkpoint and logs; preserve all working changes.\n`;
+    const currentArtifact = taskPath(id, 'IMPLEMENTATION.md');
+    const planArtifact = taskPath(id, 'PLAN.md');
+    if (existsSync(planArtifact) && field(read(planArtifact), 'Status') !== 'APPROVED') throw new Error('Existing task plan is not APPROVED');
+    if (read(currentArtifact) !== blockedArtifact) throw new Error('Implementation artifact changed; preserve it for inspection');
+    if (git('diff', '--cached', '--name-only')) throw new Error('Unexpected staged changes before Planning recovery');
+    const head = git('rev-parse', 'HEAD');
+    const previousHead = checkpoint.baseHead;
+    if (git('merge-base', checkpoint.baseHead, head) !== checkpoint.baseHead) throw new Error('Checkpoint cannot adopt this Git history');
+    const committed = git('diff', '--name-only', checkpoint.baseHead, head).split('\n').filter(Boolean);
+    if (!committed.length || committed.some((path) => !planRecoveryPaths.has(path)) || !committed.includes(planRecoveryReviewPath)) throw new Error('Planning recovery requires only reviewed runner changes');
+    const review = git('show', `${head}:${planRecoveryReviewPath}`);
+    if (field(review, 'Status') !== 'APPROVED' || !/^Reviewer: Antigravity\b/m.test(review)) throw new Error('Planning recovery review is not APPROVED by Antigravity');
+    const metadata = new Set(['.ai-collab/BACKLOG.md', '.ai-collab/STATE.md', artifactPath]);
+    if (changedWorkingPaths().some((path) => !metadata.has(path))) throw new Error('Uncommitted changes outside blocked task metadata');
+    const current = snapshot(root);
+    if (changes(checkpoint.baseline, current).some((path) => !metadata.has(path) && !planRecoveryPaths.has(path))) throw new Error('Task source changed since Planning checkpoint');
+    const prior = git('show', `${checkpoint.baseHead}:${artifactPath}`);
+    const savedArtifact = join(runtime, `${id}-${checkpoint.sequence}-blocked-implementation.md`);
+    if (existsSync(savedArtifact)) throw new Error('Archived blocked artifact already exists; inspect before retry');
+    writeFileSync(savedArtifact, blockedArtifact, { mode: 0o600 });
+    writeFileSync(currentArtifact, `${prior}\n`);
+    if (!existsSync(planArtifact)) artifact('PLAN.md', `# Plan: ${id}\n\nStatus: APPROVED\n\n${receipt.result.details}\n\nOwned paths: ${paths.join(', ')}\n`);
+    checkpoint.paths = paths;
+    checkpoint.planReceipt = receipt;
+    checkpoint.baseHead = head;
+    checkpoint.baseline = snapshot(root);
+    checkpoint.runnerUpgrade = { from: previousHead, to: head, paths: committed };
+    checkpoint.error = null;
+    transition('READY');
+    event('PLAN_PATH_RECOVERED', { receipt: checkpoint.sequence, paths });
+  } finally { rmSync(lock, { recursive: true }); }
 }
 const boundary = 'Read AGENTS.md. Work only on this task. Never push, deploy, access external Production services, run a Production migration, change credentials/secrets, or modify another task. Do not use MCP services or bypass permission checks. Never change Git HEAD/index unless this prompt explicitly requests the commit phase. Do not modify orchestrator code/config or test commands. Do not write status artifacts; the coordinator persists your structured response.';
 function reviewContext() {
@@ -210,7 +262,7 @@ async function taskLoop() {
     if (checkpoint.phase !== 'COMMITTED' && checkpoint.phase !== 'APPROVED' && git('rev-parse', 'HEAD') !== checkpoint.baseHead) throw new Error('Git HEAD changed unexpectedly');
     if (checkpoint.phase === 'PLANNING') {
       const prior = existsSync(taskPath(checkpoint.task.id, 'PLAN.md')) ? read(taskPath(checkpoint.task.id, 'PLAN.md')) : '';
-      const receipt = await agent('antigravity', 'plan', `Plan task ${checkpoint.task.id}. Approved acceptance criteria: ${checkpoint.task.criteria}. Existing task plan: ${prior || '(none)'}. Return READY only if feasible without Production actions; otherwise BLOCKED. Return explicit relative implementation file paths in paths, and the complete implementation plan with acceptance criteria in details. Do not edit files. Do not expand scope or remove existing blockers.`, ['READY']);
+      const receipt = await agent('antigravity', 'plan', `Plan task ${checkpoint.task.id}. Approved acceptance criteria: ${checkpoint.task.criteria}. Existing task plan: ${prior || '(none)'}. Return READY only if feasible without Production actions; otherwise BLOCKED. The paths JSON array is the exact source ownership allowlist for Codex: include only application source, tests, and local migration files that Codex may edit. Never include any .ai-collab/ path, including PLAN.md, IMPLEMENTATION.md, REVIEW.md, BACKLOG.md or STATE.md. The coordinator writes lifecycle artifacts separately from paths. If the existing plan assigns IMPLEMENTATION.md to Codex, treat that as lifecycle evidence owned by the coordinator, not a source path. Return the complete implementation plan with acceptance criteria in details. Do not edit files. Do not expand scope or remove existing blockers.`, ['READY']);
       checkpoint.paths = validatePaths(receipt.result.paths); checkpoint.planReceipt = receipt;
       artifact('PLAN.md', `# Plan: ${checkpoint.task.id}\n\nStatus: APPROVED\n\n${receipt.result.details}\n\nOwned paths: ${checkpoint.paths.join(', ')}\n`);
       transition('READY');
@@ -345,11 +397,12 @@ const action = process.argv[2];
 try {
   if (action === 'run' || action === 'resume') await run(action === 'resume');
   else if (action === 'recover-quota') recoverQuota();
+  else if (action === 'recover-plan-path') recoverPlanPath();
   else if (action === 'status') {
     const state = existsSync(checkpointPath) ? JSON.parse(read(checkpointPath)) : null;
     const tasks = backlog().tasks;
     console.log(JSON.stringify({ checkpoint: state ? { task: state.task?.id ?? null, status: state.status, phase: state.phase, round: state.round, error: state.error, quota: state.quota ?? null } : null, next: select()?.id ?? null, paused: tasks.filter((task) => task.status === 'PAUSED_QUOTA').map((task) => task.id), blocked: tasks.filter((task) => task.status !== 'PAUSED_QUOTA' && hasBlocker(task)).map((task) => task.id), lock: existsSync(join(lock, 'owner.json')) ? JSON.parse(read(join(lock, 'owner.json'))) : null, receipts: existsSync(runtime) ? readdirSync(runtime).filter((name) => name.endsWith('.receipt.json')).length : 0 }, null, 2));
   }
   else if (action === 'stop') { mkdirSync(runtime, { recursive: true }); writeFileSync(stopFile, 'stop\n'); console.log('Stop requested; active child will be terminated and checkpoint preserved.'); }
-  else throw new Error('Usage: node .ai-collab/orchestrator.mjs run|resume [--quota-ready]|recover-quota|status|stop');
+  else throw new Error('Usage: node .ai-collab/orchestrator.mjs run|resume [--quota-ready]|recover-quota|recover-plan-path|status|stop');
 } catch (error) { console.error(`Orchestrator stopped: ${error.message}`); process.exitCode = 1; }
