@@ -4,7 +4,7 @@
 
 ## Run, monitor, stop, resume
 
-Run from a **clean dedicated checkout** containing the approved roadmap and task artifacts. Existing uncommitted work is refused and preserved; do not reset or automatically stash another agent's work. Existing `BLOCKED` artifacts take precedence over a stale `READY` queue row. The current inquiry transaction blocker requires a planner/user decision.
+Run from a **clean dedicated checkout** containing the approved roadmap and task artifacts. Existing uncommitted work is refused and preserved; do not reset or automatically stash another agent's work. Existing `BLOCKED` artifacts take precedence over a stale `READY` queue row. The inquiry transaction plan has been revised and approved; its current run is paused by Antigravity quota.
 
 ```sh
 node .ai-collab/workflow.mjs doctor
@@ -22,6 +22,10 @@ node .ai-collab/orchestrator.mjs resume
 
 `stop` creates a stop request checked while the child runs; the coordinator terminates its process group and saves a `STOPPED` checkpoint. Ctrl-C/SIGTERM use the same path. `resume` recovers that task, validates files and Git state, and does not duplicate an already verified commit. It refuses `BLOCKED`; diagnose and preserve the recorded work before an explicit planner/operator decision. A stale lock is recovered only through `resume` after its parent and child are both dead. Do not delete a live lock.
 
+If Antigravity reports `RESOURCE_EXHAUSTED`/individual quota exhaustion, the coordinator records `PAUSED_QUOTA` at the same phase with the reset time and stops. It makes no automatic retry. `status` shows the reset time. After that time, `resume` retries only the paused task and then stops; use a later `run` to process more backlog. An operator who has verified the CLI works can use `resume --quota-ready` before the recorded reset time. If Antigravity gives no reset time, that flag is required. The flag does not change the saved reset time or bypass Git checks; another 429 pauses the same task again. Tests/review/commit are still required before `DONE`.
+
+For an older checkpoint mistakenly marked `BLOCKED` by a generic CLI exit, run `node .ai-collab/orchestrator.mjs recover-quota`. This command inspects the saved failed Antigravity log without calling a CLI; it requires proof of quota exhaustion and a matching checkpoint. It changes the local checkpoint/backlog/state to `PAUSED_QUOTA` and restores only the old generic error artifact from Git, keeping a copy and the original log in ignored `.runtime/`. It does not alter a review artifact or clear an architectural blocker. An updated runner committed while a quota checkpoint was paused can be adopted at `resume` only if the intervening commits touch the enumerated runner files, include a committed `orchestrator-quota-recovery/REVIEW.md` marked `APPROVED` by Antigravity, and no task source changed. Commit only the reviewed runner files and its review/implementation artifacts. Leave the paused task's `BACKLOG.md` and `STATE.md` changes uncommitted: including either in the runner upgrade commit is rejected. Uncommitted application changes are rejected too. A failed preflight leaves the checkpoint unchanged.
+
 `orchestrator.config.json` selects the CLI command arrays, timeout (default ten minutes per invocation/check), maximum three implementation/review rounds, and required checks. CLI authentication must already work. Codex uses `workspace-write` for implementation and `read-only` for the commit request, with `approval_policy=never` so unavailable privileges are denied. Antigravity uses plan mode, sandbox, supplied source/diff context and structured JSON without shell tools. If it needs more context or permission, the task becomes `BLOCKED`. No permission-skipping flags or global permission settings are added.
 
 ## Queue and artifacts
@@ -36,7 +40,7 @@ The lifecycle is `BACKLOG → PLANNING → READY → IN_PROGRESS → TESTING →
 
 ## Verification and commits
 
-The coordinator validates CLI exit status, JSON envelopes/schema fields, actual changed files, independent check exit codes, and Git state. It detects unowned edits, source changes after tests/review, modified npm check scripts, unexpected staging or commits, and failed/denied CLI runs. Reviews receive the actual plan, diff, current owned files and check evidence. A review context above the bounded input limit is blocked and needs task splitting.
+The coordinator validates CLI exit status, JSON envelopes/schema fields, actual changed files, independent check exit codes, and Git state. It detects unowned edits, source changes after tests/review, modified npm check scripts, unexpected staging or commits, and failed/denied CLI runs. Planning receives the task criteria and existing task plan, without a repository-wide file listing. Review receives the plan, implementation evidence, diff for task-owned tracked files, and full content only for task-owned new files. A review context above the bounded input limit is blocked and needs task splitting.
 
 Codex's final read-only invocation returns a structured `COMMIT_REQUESTED` object bound to the approved parent, tree and message. The coordinator's narrow Git executor performs that exact local commit and verifies the resulting parent/tree and clean worktree. This is deliberate: the model never receives elevated arbitrary shell permission to commit. A second metadata commit records the first hash in the Markdown artifacts; a commit cannot contain its own hash. No automatic push occurs. The next eligible task starts immediately.
 

@@ -34,6 +34,12 @@ export function snapshot(root) {
   }));
 }
 export function digest(value) { return createHash('sha256').update(JSON.stringify(value)).digest('hex'); }
+export function quotaFailure(output, observedAt = Date.now()) {
+  if (!/RESOURCE_EXHAUSTED|Individual quota reached/i.test(output ?? '')) return null;
+  const reset = String(output).match(/Resets in\s+(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?/i);
+  const seconds = reset ? Number(reset[1] ?? 0) * 3600 + Number(reset[2] ?? 0) * 60 + Number(reset[3] ?? 0) : 0;
+  return { kind: 'RESOURCE_EXHAUSTED', observedAt: new Date(observedAt).toISOString(), retryAt: seconds > 0 ? new Date(observedAt + seconds * 1000).toISOString() : null };
+}
 export function assertNoSecrets(content, path) {
   if (/sb_secret_[A-Za-z0-9_-]{12,}|sbp_[a-f0-9]{40}|gh[pousr]_[A-Za-z0-9]{20,}|sk-(?:proj-)?[A-Za-z0-9_-]{20,}|sk_live_[A-Za-z0-9_-]{12,}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/i.test(content)) throw new Error(`Potential secret in ${path}; value withheld`);
 }
@@ -90,7 +96,11 @@ export async function execute(command, { root, timeoutMs, stopFile, log, onChild
     child.on('close', (code) => {
       cleanup();
       if (log) writeFileSync(log, output + '\n--- stderr ---\n' + errors, { mode: 0o600 });
-      if (reason || code !== 0) return reject(new Error(reason || `Process exited ${code}; inspect private log`));
+      if (reason || code !== 0) {
+        const error = new Error(reason || `Process exited ${code}; inspect private log`);
+        error.output = output + '\n' + errors;
+        return reject(error);
+      }
       resolve({ stdout: output, stderr: errors, code });
     });
     child.stdin.end(input ?? '');

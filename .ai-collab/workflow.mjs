@@ -9,7 +9,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const workspace = join(root, '.ai-collab');
 const backlogPath = join(workspace, 'BACKLOG.md');
 const statePath = join(workspace, 'STATE.md');
-const statuses = new Set(['BACKLOG', 'PLANNING', 'READY', 'IN_PROGRESS', 'TESTING', 'READY_FOR_REVIEW', 'CHANGES_REQUESTED', 'APPROVED', 'COMMITTED', 'DONE', 'BLOCKED']);
+const statuses = new Set(['BACKLOG', 'PLANNING', 'READY', 'IN_PROGRESS', 'TESTING', 'READY_FOR_REVIEW', 'CHANGES_REQUESTED', 'APPROVED', 'COMMITTED', 'DONE', 'BLOCKED', 'PAUSED_QUOTA']);
 const taskIdPattern = /^[a-z0-9][a-z0-9-]*$/;
 
 function fail(message) { throw new Error(message); }
@@ -50,7 +50,7 @@ function backlog() {
   return { content, lines, tasks };
 }
 function hasBlocker(task) {
-  return task.status === 'BLOCKED' || ['PLAN.md', 'IMPLEMENTATION.md', 'REVIEW.md'].some((name) => {
+  return ['BLOCKED', 'PAUSED_QUOTA'].includes(task.status) || ['PLAN.md', 'IMPLEMENTATION.md', 'REVIEW.md'].some((name) => {
     const path = taskPath(task.id, name);
     return existsSync(path) && (statusOf(path) === 'BLOCKED' || (name === 'PLAN.md' && statusOf(path) === 'REVISED'));
   });

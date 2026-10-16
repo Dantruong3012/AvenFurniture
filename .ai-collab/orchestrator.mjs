@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { root, workspace, backlog, nextTask, hasBlocker, field, replaceField, setTaskRow, taskPath, changedWorkingPaths, scanStaged, git } from './workflow.mjs';
-import { schema, validateResult, atomicJSON, snapshot, digest, changes, assertScope, validatePaths, acquireLock, execute, assertNoSecrets } from './orchestrator-core.mjs';
+import { schema, validateResult, atomicJSON, snapshot, digest, changes, assertScope, validatePaths, acquireLock, execute, assertNoSecrets, quotaFailure } from './orchestrator-core.mjs';
 
 const runtime = join(workspace, '.runtime');
 const checkpointPath = join(runtime, 'checkpoint.json');
@@ -16,6 +16,8 @@ for (const name of ['antigravity', 'codex', 'checks']) {
   for (const command of commands) if (!Array.isArray(command) || !command.length || command.some((v) => typeof v !== 'string' || /dangerously|danger-full-access/.test(v))) throw new Error('Invalid/unsafe CLI configuration');
 }
 const read = (path) => readFileSync(path, 'utf8');
+const runnerReviewPath = '.ai-collab/tasks/orchestrator-quota-recovery/REVIEW.md';
+const runnerUpgradePaths = new Set(['.ai-collab/orchestrator.mjs', '.ai-collab/orchestrator-core.mjs', '.ai-collab/workflow.mjs', '.ai-collab/orchestrator.integration.test.mjs', '.ai-collab/orchestrator.test.mjs', '.ai-collab/README.md', '.ai-collab/tasks/orchestrator-quota-recovery/IMPLEMENTATION.md', runnerReviewPath, 'AGENTS.md']);
 let checkpoint;
 const save = () => atomicJSON(checkpointPath, checkpoint);
 function event(phase, extra = {}) {
@@ -40,31 +42,103 @@ function artifact(name, content) {
   mkdirSync(join(workspace, 'tasks', checkpoint.task.id), { recursive: true });
   writeFileSync(taskPath(checkpoint.task.id, name), content);
 }
+function pauseQuota(quota) {
+  checkpoint.quota = quota;
+  checkpoint.status = 'PAUSED_QUOTA';
+  checkpoint.error = 'Antigravity quota exhausted';
+  save();
+  updateState('PAUSED_QUOTA', quota.retryAt ? `Antigravity quota; retry after ${quota.retryAt}` : 'Antigravity quota; confirm availability before resume');
+  writeFileSync(join(workspace, 'STATE.md'), replaceField(read(join(workspace, 'STATE.md')), 'Next task', '-'));
+  const data = backlog(), task = data.tasks.find((item) => item.id === checkpoint.task.id);
+  setTaskRow(data, task, 'PAUSED_QUOTA');
+  event('PAUSED_QUOTA', { retryAt: quota.retryAt });
+}
+function restoreLegacyQuotaArtifact() {
+  const path = taskPath(checkpoint.task.id, 'IMPLEMENTATION.md');
+  if (!existsSync(path)) return;
+  const current = read(path);
+  if (!/^# Implementation: [a-z0-9-]+\n\nStatus: BLOCKED\n\nProcess exited \d+; inspect private log\n\nSee local checkpoint and logs; preserve all working changes\.\n$/.test(current)) {
+    if (field(current, 'Status') === 'BLOCKED') throw new Error('Existing implementation has a non-quota blocker; preserve it');
+    return;
+  }
+  const prior = git('show', `${checkpoint.baseHead}:.ai-collab/tasks/${checkpoint.task.id}/IMPLEMENTATION.md`);
+  writeFileSync(join(runtime, `${checkpoint.task.id}-legacy-quota-implementation.md`), current, { mode: 0o600 });
+  writeFileSync(path, `${prior}\n`);
+}
+function recoverQuota() {
+  acquireLock(lock, true);
+  try {
+    if (!existsSync(checkpointPath)) throw new Error('No checkpoint to recover');
+    checkpoint = JSON.parse(read(checkpointPath));
+    if (checkpoint.status !== 'BLOCKED' || !['PLANNING', 'READY_FOR_REVIEW'].includes(checkpoint.phase) || !/^Process exited \d+; inspect private log$/.test(checkpoint.error ?? '') || !checkpoint.sequence) throw new Error('Only a legacy CLI-exit BLOCKED checkpoint can be reclassified');
+    const operation = checkpoint.phase === 'PLANNING' ? 'plan' : 'review';
+    const log = join(runtime, `${checkpoint.task.id}-${checkpoint.sequence}-${operation}.log`);
+    if (!existsSync(log) || existsSync(log.replace(/\.log$/, '.receipt.json'))) throw new Error('Missing failed CLI log or a successful receipt exists');
+    const quota = quotaFailure(read(log), statSync(log).mtimeMs);
+    if (!quota) throw new Error('Log does not prove RESOURCE_EXHAUSTED');
+    quota.logDigest = digest(read(log));
+    if (checkpoint.phase === 'PLANNING') restoreLegacyQuotaArtifact();
+    pauseQuota(quota);
+  } finally { rmSync(lock, { recursive: true }); }
+}
+function adoptReviewedRunner() {
+  const head = git('rev-parse', 'HEAD');
+  if (head === checkpoint.baseHead) return null;
+  if (checkpoint.phase !== 'PLANNING' || checkpoint.round !== 0 || git('merge-base', checkpoint.baseHead, head) !== checkpoint.baseHead) throw new Error('Checkpoint cannot adopt this Git history');
+  const committed = git('diff', '--name-only', checkpoint.baseHead, head).split('\n').filter(Boolean);
+  if (!committed.length || committed.some((path) => !runnerUpgradePaths.has(path))) throw new Error('Non-runner changes since checkpoint; inspect before recovery');
+  if (!committed.includes(runnerReviewPath)) throw new Error('Runner upgrade requires a committed Antigravity review');
+  const review = git('show', `${head}:${runnerReviewPath}`);
+  if (field(review, 'Status') !== 'APPROVED' || !/^Reviewer: Antigravity\b/m.test(review)) throw new Error('Runner upgrade review is not APPROVED by Antigravity');
+  const dirty = changedWorkingPaths();
+  const metadata = new Set(['.ai-collab/BACKLOG.md', '.ai-collab/STATE.md', `.ai-collab/tasks/${checkpoint.task.id}/IMPLEMENTATION.md`]);
+  if (dirty.some((path) => !metadata.has(path))) throw new Error('Uncommitted changes outside paused task metadata; commit reviewed runner first');
+  const current = snapshot(root);
+  const sourceChanged = changes(checkpoint.baseline, current).filter((path) => !metadata.has(path));
+  if (sourceChanged.some((path) => !runnerUpgradePaths.has(path))) throw new Error('Task source changed since quota checkpoint');
+  return { baseHead: head, baseline: current, runnerUpgrade: { from: checkpoint.baseHead, to: head, paths: committed } };
+}
 const boundary = 'Read AGENTS.md. Work only on this task. Never push, deploy, access external Production services, run a Production migration, change credentials/secrets, or modify another task. Do not use MCP services or bypass permission checks. Never change Git HEAD/index unless this prompt explicitly requests the commit phase. Do not modify orchestrator code/config or test commands. Do not write status artifacts; the coordinator persists your structured response.';
 function reviewContext() {
-  const content = checkpoint.paths.map((path) => {
-    const text = existsSync(join(root, path)) ? read(join(root, path)) : '(deleted)';
+  const tracked = new Set(git('ls-tree', '-r', '--name-only', checkpoint.baseHead).split('\n'));
+  const newFiles = checkpoint.paths.filter((path) => !tracked.has(path) && existsSync(join(root, path))).map((path) => {
+    const text = read(join(root, path));
     assertNoSecrets(text, path);
     return `FILE ${path}\n${text}`;
   }).join('\n\n');
-  if (content.length > 100000) throw new Error('Review context exceeds bounded input; split the task');
-  return `PLAN\n${read(taskPath(checkpoint.task.id, 'PLAN.md'))}\nIMPLEMENTATION\n${read(taskPath(checkpoint.task.id, 'IMPLEMENTATION.md'))}\nDIFF\n${git('diff', checkpoint.baseHead, '--', ...checkpoint.paths)}\nCURRENT FILES\n${content}`;
+  const diff = git('diff', checkpoint.baseHead, '--', ...checkpoint.paths);
+  const context = `PLAN\n${read(taskPath(checkpoint.task.id, 'PLAN.md'))}\nIMPLEMENTATION\n${read(taskPath(checkpoint.task.id, 'IMPLEMENTATION.md'))}\nTRACKED FILE DIFF\n${diff}\nNEW FILES\n${newFiles}`;
+  if (context.length > 60000) throw new Error('Review context exceeds bounded input; split the task');
+  assertNoSecrets(context, 'review context');
+  return context;
 }
 async function agent(kind, phase, prompt, statuses) {
   const seq = checkpoint.sequence = (checkpoint.sequence ?? 0) + 1; save();
   const prefix = join(runtime, `${checkpoint.task.id}-${seq}-${phase}`);
   const schemaFile = `${prefix}.schema.json`, resultFile = `${prefix}.result.json`;
   atomicJSON(schemaFile, schema);
+  const rules = read(join(root, 'AGENTS.md')).split('# AvenFurniture multi-agent development')[1] ?? '';
   const args = kind === 'antigravity'
-    ? [...config.antigravity, '-p', `Use only the supplied context. Do not call tools, shell commands, or read/write files. Return structured JSON only. If context is insufficient return BLOCKED.\nRepository instructions:\n${read(join(root, 'AGENTS.md'))}\n${prompt}`, '--mode', 'plan', '--sandbox', '--output-format', 'json', '--json-schema', schemaFile, '--print-timeout', `${Math.ceil(config.timeoutMs / 1000)}s`]
+    ? [...config.antigravity, '-p', `Use only the supplied task context. Do not call tools, shell commands, or read/write files. Return structured JSON only. If context is insufficient return BLOCKED.\nTask rules:\n${rules}\n${prompt}`, '--mode', 'plan', '--sandbox', '--output-format', 'json', '--json-schema', schemaFile, '--print-timeout', `${Math.ceil(config.timeoutMs / 1000)}s`]
     : [...config.codex, 'exec', '--sandbox', phase === 'commit' ? 'read-only' : 'workspace-write', '-c', 'approval_policy="never"', '-C', root, '--json', '--output-schema', schemaFile, '-o', resultFile, '-'];
   const before = snapshot(root), head = git('rev-parse', 'HEAD'), index = git('write-tree');
   event('CLI_STARTED', { agent: kind, operation: phase, sequence: seq });
-  const result = await execute(args, { root, timeoutMs: config.timeoutMs, stopFile, log: `${prefix}.log`, input: kind === 'codex' ? `${boundary}\n${prompt}` : undefined,
-    onChild: (pid) => atomicJSON(join(lock, 'owner.json'), { pid: process.pid, childPid: pid }) });
+  let result;
+  try {
+    result = await execute(args, { root, timeoutMs: config.timeoutMs, stopFile, log: `${prefix}.log`, input: kind === 'codex' ? `${boundary}\n${prompt}` : undefined,
+      onChild: (pid) => atomicJSON(join(lock, 'owner.json'), { pid: process.pid, childPid: pid }) });
+  } catch (error) {
+    if (kind === 'antigravity') error.quota = quotaFailure(error.output);
+    throw error;
+  }
   let structured;
   if (kind === 'antigravity') {
     const envelope = JSON.parse(result.stdout);
+    if (envelope.status !== 'SUCCESS') {
+      const error = new Error('Antigravity JSON envelope failed; inspect private log');
+      error.quota = quotaFailure(`${result.stdout}\n${result.stderr}`);
+      throw error;
+    }
     if (envelope.status !== 'SUCCESS' || !envelope.structured_output || envelope.denied_actions?.length) throw new Error('Antigravity JSON envelope failed or tools were denied');
     structured = envelope.structured_output;
   } else {
@@ -86,8 +160,8 @@ function select() {
   if (field(data.content, 'Roadmap approval') !== 'APPROVED') throw new Error('Roadmap is not APPROVED');
   return nextTask(data.tasks) ?? data.tasks.filter((t) => t.status === 'BACKLOG' && !hasBlocker(t) && t.dependencies.every((id) => data.tasks.some((dep) => dep.id === id && dep.status === 'DONE' && !hasBlocker(dep)))).sort((a, b) => a.priority.localeCompare(b.priority) || a.lineNumber - b.lineNumber)[0];
 }
-function assertTaskScope() {
-  assertScope(checkpoint.baseline, snapshot(root), [...checkpoint.paths, '.ai-collab/BACKLOG.md', '.ai-collab/STATE.md', ...['PLAN.md', 'IMPLEMENTATION.md', 'REVIEW.md'].map((name) => `.ai-collab/tasks/${checkpoint.task.id}/${name}`)]);
+function assertTaskScope(baseline = checkpoint.baseline) {
+  assertScope(baseline, snapshot(root), [...checkpoint.paths, '.ai-collab/BACKLOG.md', '.ai-collab/STATE.md', ...['PLAN.md', 'IMPLEMENTATION.md', 'REVIEW.md'].map((name) => `.ai-collab/tasks/${checkpoint.task.id}/${name}`)]);
 }
 function sourceDigest() {
   const ignored = ['.ai-collab/BACKLOG.md', '.ai-collab/STATE.md', ...['PLAN.md', 'IMPLEMENTATION.md', 'REVIEW.md'].map((name) => `.ai-collab/tasks/${checkpoint.task.id}/${name}`)];
@@ -136,7 +210,7 @@ async function taskLoop() {
     if (checkpoint.phase !== 'COMMITTED' && checkpoint.phase !== 'APPROVED' && git('rev-parse', 'HEAD') !== checkpoint.baseHead) throw new Error('Git HEAD changed unexpectedly');
     if (checkpoint.phase === 'PLANNING') {
       const prior = existsSync(taskPath(checkpoint.task.id, 'PLAN.md')) ? read(taskPath(checkpoint.task.id, 'PLAN.md')) : '';
-      const receipt = await agent('antigravity', 'plan', `Plan task ${checkpoint.task.id}. Approved acceptance criteria: ${checkpoint.task.criteria}. Existing plan: ${prior || '(none)'}. Repository tracked files: ${git('ls-files')}. Return READY only if feasible without Production actions; otherwise BLOCKED. Return explicit relative implementation file paths in paths, and the complete implementation plan with acceptance criteria in details. Do not edit files. Do not expand scope or remove existing blockers.`, ['READY']);
+      const receipt = await agent('antigravity', 'plan', `Plan task ${checkpoint.task.id}. Approved acceptance criteria: ${checkpoint.task.criteria}. Existing task plan: ${prior || '(none)'}. Return READY only if feasible without Production actions; otherwise BLOCKED. Return explicit relative implementation file paths in paths, and the complete implementation plan with acceptance criteria in details. Do not edit files. Do not expand scope or remove existing blockers.`, ['READY']);
       checkpoint.paths = validatePaths(receipt.result.paths); checkpoint.planReceipt = receipt;
       artifact('PLAN.md', `# Plan: ${checkpoint.task.id}\n\nStatus: APPROVED\n\n${receipt.result.details}\n\nOwned paths: ${checkpoint.paths.join(', ')}\n`);
       transition('READY');
@@ -208,11 +282,26 @@ async function run(resume) {
   acquireLock(lock, resume);
   const stop = () => writeFileSync(stopFile, 'stop\n');
   process.on('SIGINT', stop); process.on('SIGTERM', stop);
+  let quotaResume = false;
   try {
     if (resume) {
       if (!existsSync(checkpointPath)) throw new Error('No checkpoint to resume');
       checkpoint = JSON.parse(read(checkpointPath));
       if (checkpoint.status === 'BLOCKED') throw new Error('BLOCKED checkpoint requires investigation; it cannot be silently resumed');
+      if (checkpoint.status === 'PAUSED_QUOTA') {
+        const quotaReady = process.argv.slice(3).includes('--quota-ready');
+        if (checkpoint.quota?.retryAt && Date.now() < Date.parse(checkpoint.quota.retryAt) && !quotaReady) throw new Error(`Antigravity quota pause remains until ${checkpoint.quota.retryAt}; use --quota-ready only after verifying CLI availability`);
+        if (!checkpoint.quota?.retryAt && !quotaReady) throw new Error('Quota reset time unknown; use resume --quota-ready only after confirming availability');
+        if (checkpoint.configDigest !== configDigest) throw new Error('Configuration changed since checkpoint');
+        if (hasBlocker({ ...checkpoint.task, status: 'READY' })) throw new Error('Task artifact is BLOCKED; operator/planner decision required');
+        if (git('diff', '--cached', '--name-only')) throw new Error('Unexpected staged changes before quota resume');
+        const upgrade = adoptReviewedRunner();
+        assertTaskScope(upgrade?.baseline ?? checkpoint.baseline);
+        if (upgrade) Object.assign(checkpoint, upgrade);
+        quotaResume = true;
+        checkpoint.status = 'RUNNING'; save();
+        if (upgrade) event('RUNNER_UPGRADE_ADOPTED', { paths: upgrade.runnerUpgrade.paths });
+      }
       rmSync(stopFile, { force: true });
     } else {
       if (existsSync(checkpointPath) && !['DONE', 'IDLE'].includes(JSON.parse(read(checkpointPath)).status)) throw new Error('Unfinished checkpoint; use status/resume');
@@ -231,10 +320,15 @@ async function run(resume) {
       }
       await taskLoop();
       checkpoint.status = 'DONE'; save(); event('DONE', { commit: checkpoint.commit, metadataCommit: git('rev-parse', 'HEAD') });
+      if (quotaResume) { event('QUOTA_RECOVERY_TASK_DONE'); return; }
       // Continue the next eligible task without an IDE-to-IDE message.
     }
   } catch (error) {
-    if (checkpoint?.task && checkpoint.status !== 'BLOCKED') {
+    if (checkpoint?.task && !['BLOCKED', 'PAUSED_QUOTA'].includes(checkpoint.status)) {
+      if (error.quota) {
+        pauseQuota(error.quota);
+        throw new Error(error.quota.retryAt ? `Antigravity quota exhausted; paused until ${error.quota.retryAt}` : 'Antigravity quota exhausted; paused until availability is confirmed');
+      }
       checkpoint.status = error.message === 'STOPPED' ? 'STOPPED' : 'BLOCKED'; checkpoint.error = error.message; save();
       if (checkpoint.status === 'BLOCKED') {
         artifact('IMPLEMENTATION.md', `# Implementation: ${checkpoint.task.id}\n\nStatus: BLOCKED\n\n${error.message}\n\nSee local checkpoint and logs; preserve all working changes.\n`);
@@ -250,7 +344,12 @@ async function run(resume) {
 const action = process.argv[2];
 try {
   if (action === 'run' || action === 'resume') await run(action === 'resume');
-  else if (action === 'status') console.log(JSON.stringify({ checkpoint: existsSync(checkpointPath) ? JSON.parse(read(checkpointPath)) : null, next: select()?.id ?? null, blocked: backlog().tasks.filter(hasBlocker).map((t) => t.id), lock: existsSync(join(lock, 'owner.json')) ? JSON.parse(read(join(lock, 'owner.json'))) : null, receipts: existsSync(runtime) ? readdirSync(runtime).filter((name) => name.endsWith('.receipt.json')).length : 0 }, null, 2));
+  else if (action === 'recover-quota') recoverQuota();
+  else if (action === 'status') {
+    const state = existsSync(checkpointPath) ? JSON.parse(read(checkpointPath)) : null;
+    const tasks = backlog().tasks;
+    console.log(JSON.stringify({ checkpoint: state ? { task: state.task?.id ?? null, status: state.status, phase: state.phase, round: state.round, error: state.error, quota: state.quota ?? null } : null, next: select()?.id ?? null, paused: tasks.filter((task) => task.status === 'PAUSED_QUOTA').map((task) => task.id), blocked: tasks.filter((task) => task.status !== 'PAUSED_QUOTA' && hasBlocker(task)).map((task) => task.id), lock: existsSync(join(lock, 'owner.json')) ? JSON.parse(read(join(lock, 'owner.json'))) : null, receipts: existsSync(runtime) ? readdirSync(runtime).filter((name) => name.endsWith('.receipt.json')).length : 0 }, null, 2));
+  }
   else if (action === 'stop') { mkdirSync(runtime, { recursive: true }); writeFileSync(stopFile, 'stop\n'); console.log('Stop requested; active child will be terminated and checkpoint preserved.'); }
-  else throw new Error('Usage: node .ai-collab/orchestrator.mjs run|resume|status|stop');
+  else throw new Error('Usage: node .ai-collab/orchestrator.mjs run|resume [--quota-ready]|recover-quota|status|stop');
 } catch (error) { console.error(`Orchestrator stopped: ${error.message}`); process.exitCode = 1; }

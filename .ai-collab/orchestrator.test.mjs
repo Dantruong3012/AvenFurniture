@@ -4,7 +4,16 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
-import { validateResult, validatePaths, assertScope, snapshot, acquireLock, atomicJSON, execute } from './orchestrator-core.mjs';
+import { validateResult, validatePaths, assertScope, snapshot, acquireLock, atomicJSON, execute, quotaFailure } from './orchestrator-core.mjs';
+
+test('classify quota separately from implementation and architecture failures', () => {
+  const quota = quotaFailure('AGY_ERROR: RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 30h29m49s.', Date.UTC(2026, 9, 16));
+  assert.equal(quota.kind, 'RESOURCE_EXHAUSTED');
+  assert.equal(Date.parse(quota.retryAt) - Date.parse(quota.observedAt), (30 * 3600 + 29 * 60 + 49) * 1000);
+  assert.equal(quotaFailure('Architecture blocker: transaction needed'), null);
+  assert.equal(quotaFailure('Process exited 3; inspect private log'), null);
+  assert.equal(quotaFailure('RESOURCE_EXHAUSTED without reset time').retryAt, null);
+});
 
 test('reject false approval, malformed JSON contract, and unsafe owned paths', () => {
   assert.throws(() => validateResult({ status: 'PASS' }, ['APPROVED']));
