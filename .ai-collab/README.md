@@ -69,6 +69,6 @@ The deterministic tests cover dependencies, retry exhaustion, false commit reque
 
 This is cooperative local automation, not an OS-level protection against arbitrary tools outside the coordinator. Configure CLI/MCP access conservatively, retain the sandbox defaults, and treat Production approvals as separate. The runner never runs migrations or deployments itself.
 
-## Release upgrade (M1, pending review)
+## Release upgrade status
 
-See [audit](release/AUDIT.md), [milestone design](release/DESIGN.md), and [operations](release/OPERATIONS.md). Release automation defaults to disabled/manual. `doctor` and `release-status` report current local evidence; `release-push` requires enabled reviewed configuration and immutable completed-task evidence. M2–M8 are planned separately. Local, Preview and Production share Supabase; live testing must remain read-only without separate approval. Do not change the blocked admin task checkpoint to activate this upgrade.
+See [audit](release/AUDIT.md), [milestone design](release/DESIGN.md), and [operations](release/OPERATIONS.md) for the current verified status and remaining gates. M1–M2 and the M3 local Playwright suite are reviewed and committed. Release automation remains disabled/manual; M4–M8 and live Preview E2E are incomplete. `doctor` and `release-status` report local evidence; `release-push` requires enabled reviewed configuration and immutable completed-task evidence. Local, Preview and Production share Supabase, so live testing remains read-only without separate approval. Preserve the blocked admin checkpoint.
