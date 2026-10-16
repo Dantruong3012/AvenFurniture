@@ -1,0 +1,7 @@
+# M3 browser tests
+
+Run `npm ci`, `npx playwright install chromium firefox`, then `npm run test:e2e`. The Playwright config builds and starts the Next.js application on localhost:3100. It starts with a dummy publishable key and a test-only Node preload; all server-side requests to the hard-pinned Supabase origin are answered by deterministic read-only fixtures. Unknown routes and any non-GET request to Supabase fail. The preload refuses to start without `AVEN_E2E_MOCK=1`. No application source or Supabase project configuration is changed.
+
+The fixture data is illustrative test data inside this checkout only. It is never inserted into Supabase. Contact form success is tested by intercepting `/api/inquiries` in the browser before it reaches the server. The admin test visits a protected route without submitting credentials. All fixture tests are local; `E2E_BASE_URL` accepts only a localhost origin. A test failure or missing browser is not a pass, and no tests are skipped.
+
+The current Git Preview is protected by Vercel SSO. These local tests do **not** establish live Preview E2E health. A separate read-only Preview probe needs an operator-provided, verified protection access method. It may navigate catalog/product/cart and load assets with GET requests only. It must never submit an inquiry, attempt authentication, write products, or exercise another mutation against Preview because Local, Preview and Production share one Supabase database. Do not disable Preview protection or invent a bypass token to make a test pass.
