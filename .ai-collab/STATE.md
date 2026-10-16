@@ -1,7 +1,7 @@
 # Workflow state
 
-Active task: -
-Current phase: IDLE
+Active task: storefront-inquiry-forms
+Current phase: APPROVED
 Last completed task: inquiry-service-layer
 Next task: -
 Blockers: -
