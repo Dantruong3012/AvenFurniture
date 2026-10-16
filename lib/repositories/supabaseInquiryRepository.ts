@@ -3,15 +3,13 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/lib/supabase/admin";
 import type { Database, Tables } from "@/lib/supabase/database.types";
 import { uuidPattern } from "@/lib/validation/catalog";
-import { inquiryError, inquiryStatuses, validateCustomerInquiryInput, type CustomerInquiryInput, type InquiryStatus } from "@/lib/validation/inquiry";
+import { inquiryError, inquiryStatuses, validateCustomerInquiryInput, validateInquiryNote, type CustomerInquiryInput, type InquiryStatus } from "@/lib/validation/inquiry";
+import type { AdminInquirySummary, AdminInquiryDetail } from "@/lib/types";
+export type { AdminInquirySummary, AdminInquiryDetail } from "@/lib/types";
 
 export type InquirySubmissionResult = Database["public"]["Functions"]["submit_customer_inquiry"]["Returns"][number];
-export type AdminInquiryFilters = { page?: number; pageSize?: number; status?: InquiryStatus; q?: string };
-export type AdminInquirySummary = Tables<"inquiries"> & { item_count: number };
-export type AdminInquiryDetail = Tables<"inquiries"> & {
-  inquiry_items: Tables<"inquiry_items">[];
-  inquiry_notes: Tables<"inquiry_notes">[];
-};
+export type AdminInquiryFilters = { page?: number; pageSize?: number; status?: InquiryStatus | "all"; q?: string };
+const summaryColumns = "id,reference,created_at,contact_name,contact_phone,contact_email,source,status" as const;
 
 /** Call from a trusted server entry point after its request/rate-limit checks.
  * Retain the submission key across retries. Snapshots are customer requests,
@@ -50,10 +48,10 @@ function requireId(id: string) {
 export async function listAdminInquiries(supabase: SupabaseClient<Database>, filters: AdminInquiryFilters = {}): Promise<{ inquiries: AdminInquirySummary[]; count: number }> {
   const { page = 1, pageSize = 25, status, q } = filters;
   if (!Number.isSafeInteger(page) || page < 1 || page > 10000 || !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 100) throw new Error("Invalid inquiry page.");
-  if (status !== undefined && !inquiryStatuses.includes(status)) throw new Error("Choose a valid inquiry status.");
+  if (status !== undefined && status !== "all" && !inquiryStatuses.includes(status)) throw new Error("Choose a valid inquiry status.");
   if (q !== undefined && (typeof q !== "string" || q.length > 200 || q.includes("\0"))) throw new Error("Enter a search of at most 200 characters.");
-  let query = supabase.from("inquiries").select("*,inquiry_items(count)", { count: "exact" }).is("deleted_at", null);
-  if (status) query = query.eq("status", status);
+  let query = supabase.from("inquiries").select(`${summaryColumns},inquiry_items(count)`, { count: "exact" }).is("deleted_at", null);
+  if (status && status !== "all") query = query.eq("status", status);
   if (q?.trim()) {
     // Escape LIKE wildcards, then quote/escape the PostgREST filter value so
     // commas, parentheses and quotes remain literal customer search text.
@@ -68,9 +66,10 @@ export async function listAdminInquiries(supabase: SupabaseClient<Database>, fil
 
 export async function getAdminInquiryById(supabase: SupabaseClient<Database>, id: string): Promise<AdminInquiryDetail | null> {
   requireId(id);
-  const { data, error } = await supabase.from("inquiries").select("*,inquiry_items(*),inquiry_notes(*)")
+  const { data, error } = await supabase.from("inquiries").select(`${summaryColumns},message,inquiry_items(id,product_name,product_slug,quantity,unit_price,currency),inquiry_notes(id,body,created_at,author_id)`)
     .eq("id", id).is("deleted_at", null).order("created_at", { referencedTable: "inquiry_notes", ascending: true })
-    .order("id", { referencedTable: "inquiry_notes", ascending: true }).maybeSingle();
+    .order("id", { referencedTable: "inquiry_notes", ascending: true })
+    .order("id", { referencedTable: "inquiry_items", ascending: true }).maybeSingle();
   if (error) throw new Error("Inquiry details are temporarily unavailable.");
   return data;
 }
@@ -92,8 +91,11 @@ export async function updateAdminInquiryStatus(supabase: SupabaseClient<Database
 
 export async function addAdminInquiryNote(supabase: SupabaseClient<Database>, inquiryId: string, body: string): Promise<Tables<"inquiry_notes">> {
   requireId(inquiryId);
-  if (typeof body !== "string" || !body.trim() || body.trim().length > 10000 || body.includes("\0")) throw new Error("Enter a note of 1–10000 characters.");
-  const { data, error } = await supabase.from("inquiry_notes").insert({ inquiry_id: inquiryId, body: body.trim() }).select("*").single();
+  const note = validateInquiryNote(body);
+  const parent = await supabase.from("inquiries").select("id").eq("id", inquiryId).is("deleted_at", null).maybeSingle();
+  if (parent.error) throw new Error("Unable to verify the inquiry. Refresh and try again.");
+  if (!parent.data) throw new Error("Inquiry not found or no longer available to your session.");
+  const { data, error } = await supabase.from("inquiry_notes").insert({ inquiry_id: inquiryId, body: note }).select("*").single();
   // author_id comes from auth.uid() in PostgreSQL, never from submitted data.
   if (error) throw new Error(inquiryError(error.code));
   if (!data) throw new Error("Unable to add the inquiry note.");

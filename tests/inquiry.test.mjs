@@ -126,13 +126,13 @@ test("admin repository uses caller client for paginated status/search queries, d
     { body: [{ ...row, inquiry_items: [{ count: 2 }] }], headers: { "content-range": "2-2/3" } },
     { body: [{ ...row, inquiry_items: [item], inquiry_notes: [{ body: "note" }] }] },
     { body: [{ ...row, status: "consulting" }] }, { body: [row] },
-    { body: { id, inquiry_id: id, author_id: id, body: "Note" } }, { body: [] },
+    { body: [{ id }] }, { body: { id, inquiry_id: id, author_id: id, body: "Note" } }, { body: [] },
   ]);
   const listed = await repo.listAdminInquiries(supabase, { page: 2, pageSize: 2, status: "new", q: 'a%,)"\\_' });
   assert.equal(listed.count, 3);
   assert.equal(listed.inquiries[0].item_count, 2);
   const params = requests[0].url.searchParams;
-  assert.equal(params.get("select"), "*,inquiry_items(count)");
+  assert.equal(params.get("select"), "id,reference,created_at,contact_name,contact_phone,contact_email,source,status,inquiry_items(count)");
   assert.equal(params.get("offset"), "2"); assert.equal(params.get("limit"), "2");
   assert.equal(params.get("status"), "eq.new"); assert.equal(params.get("deleted_at"), "is.null");
   assert.equal(params.get("order"), "created_at.desc,id.desc");
@@ -141,12 +141,15 @@ test("admin repository uses caller client for paginated status/search queries, d
   assert.equal((await repo.getAdminInquiryById(supabase, id)).inquiry_notes[0].body, "note");
   assert.equal(requests[1].url.searchParams.get("id"), `eq.${id}`);
   assert.equal(requests[1].url.searchParams.get("inquiry_notes.order"), "created_at.asc,id.asc");
+  assert.equal(requests[1].url.searchParams.get("inquiry_items.order"), "id.asc");
+  assert.doesNotMatch(requests[1].url.searchParams.get("select"), /\*|original_submission|idempotency_key/);
   await repo.updateAdminInquiryStatus(supabase, id, "consulting");
   assert.deepEqual(requests[2].body, { status: "consulting" });
   await repo.updateAdminInquiryStatus(supabase, id, undefined, null);
   assert.deepEqual(requests[3].body, { assignee_id: null });
   assert.equal((await repo.addAdminInquiryNote(supabase, id, " Note ")).body, "Note");
-  assert.deepEqual(requests[4].body, { inquiry_id: id, body: "Note" });
+  assert.equal(requests[4].url.searchParams.get("deleted_at"), "is.null");
+  assert.deepEqual(requests[5].body, { inquiry_id: id, body: "Note" });
   assert.equal(await repo.getAdminInquiryById(supabase, id), null);
   assert.equal(repo.clients(), 0);
 });
@@ -163,9 +166,34 @@ test("admin repository rejects invalid mutations/filters before querying and sur
   assert.equal(requests.length, 0);
   const missing = adminClient([{ body: [] }]);
   await assert.rejects(repo.updateAdminInquiryStatus(missing.supabase, id, "completed"), /not found/);
-  const denied = adminClient([{ status: 403, body: { code: "42501", message: "private detail" } }]);
+  const denied = adminClient([{ body: [{ id }] }, { status: 403, body: { code: "42501", message: "private detail" } }]);
   await assert.rejects(repo.addAdminInquiryNote(denied.supabase, id, "note"), /session or permissions/);
   assert.equal(repo.clients(), 0);
+});
+
+test("all status view omits a status predicate but always excludes deleted inquiries", async () => {
+  const repo = repository();
+  for (const status of [undefined, "all", "new", "consulting", "completed", "cancelled"]) {
+    const { supabase, requests } = adminClient([{ body: [], headers: { "content-range": "*/0" } }]);
+    assert.deepEqual(await repo.listAdminInquiries(supabase, { status, q: " " }), { inquiries: [], count: 0 });
+    const params = requests[0].url.searchParams;
+    assert.equal(params.get("status"), status && status !== "all" ? `eq.${status}` : null);
+    assert.equal(params.get("deleted_at"), "is.null");
+    assert.equal(params.get("or"), null);
+  }
+  assert.equal(repo.clients(), 0);
+});
+
+test("notes cannot be added to missing, deleted or unreadable inquiry parents", async () => {
+  const repo = repository();
+  for (const response of [{ body: [] }, { status: 403, body: { message: "private detail" } }]) {
+    const { supabase, requests } = adminClient([response]);
+    await assert.rejects(repo.addAdminInquiryNote(supabase, id, "Note"), (error) => !error.message.includes("private detail"));
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].method, "GET");
+    assert.equal(requests[0].url.searchParams.get("id"), `eq.${id}`);
+    assert.equal(requests[0].url.searchParams.get("deleted_at"), "is.null");
+  }
 });
 
 test("inquiry RPC and staff access on isolated PostgreSQL with all local migrations", async (t) => {
@@ -280,6 +308,11 @@ test("inquiry RPC and staff access on isolated PostgreSQL with all local migrati
     assert.ok(listed.rows.some((row) => row.id === created.id && row.item_count === 1));
     const updated = await db.query("update public.inquiries set status='consulting',assignee_id=$2 where id=$1 returning *", [created.id, staff]);
     assert.equal(updated.rows[0].status, "consulting"); assert.equal(updated.rows[0].assignee_id, staff);
+    for (const status of ["new", "consulting", "completed", "cancelled"]) {
+      const changed = await db.query("update public.inquiries set status=$2 where id=$1 returning status", [created.id, status]);
+      assert.equal(changed.rows[0].status, status);
+    }
+    await assert.rejects(db.query("update public.inquiries set status='unknown' where id=$1", [created.id]), (error) => error.code === "23514");
     const note = await db.query("insert into public.inquiry_notes(inquiry_id,body) values ($1,'Called customer') returning *", [created.id]);
     assert.equal(note.rows[0].author_id, staff);
     assert.equal((await db.query("select * from public.inquiry_items where inquiry_id=$1", [created.id])).rows.length, 1);

@@ -1,9 +1,26 @@
 import { uuidPattern } from "./catalog";
+import type { InquiryPortalQuery } from "@/lib/types";
 
 export const inquirySources = ["cart", "product", "contact", "manual"] as const;
 export const inquiryStatuses = ["new", "consulting", "completed", "cancelled"] as const;
 export type InquirySource = typeof inquirySources[number];
 export type InquiryStatus = typeof inquiryStatuses[number];
+
+export function validateInquiryNote(body: unknown): string {
+  if (typeof body !== "string" || !body.trim() || body.trim().length > 10000 || body.includes("\0")) {
+    throw new Error("Enter a note of 1–10000 characters.");
+  }
+  return body.trim();
+}
+
+export function parseInquiryPortalQuery(params: Record<string, string | string[] | undefined>): InquiryPortalQuery {
+  const { page = "1", status = "all", q = "", inquiry } = params;
+  if (typeof page !== "string" || !/^[1-9]\d{0,4}$/.test(page) || Number(page) > 10000) throw new Error("Choose a page from 1 to 10000.");
+  if (typeof status !== "string" || (status !== "all" && !inquiryStatuses.includes(status as InquiryStatus))) throw new Error("Choose a valid inquiry status.");
+  if (typeof q !== "string" || q.length > 200 || q.includes("\0")) throw new Error("Enter a search of at most 200 characters.");
+  if (inquiry !== undefined && (typeof inquiry !== "string" || !uuidPattern.test(inquiry))) throw new Error("Choose a valid inquiry.");
+  return { page: Number(page), status: status as InquiryPortalQuery["status"], q: q.trim(), inquiry };
+}
 export type InquiryItemInput = {
   productId?: string | null;
   productName: string;
