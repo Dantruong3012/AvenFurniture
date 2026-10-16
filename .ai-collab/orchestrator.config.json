@@ -1,0 +1,12 @@
+{
+  "antigravity": ["agy"],
+  "codex": ["npx", "-y", "@openai/codex"],
+  "timeoutMs": 600000,
+  "maxRounds": 3,
+  "checks": [
+    ["npm", "run", "lint"],
+    ["npm", "run", "typecheck"],
+    ["npm", "test"],
+    ["npm", "run", "build"]
+  ]
+}

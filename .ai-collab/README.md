@@ -1,29 +1,56 @@
-# AvenFurniture collaboration workspace
+# AvenFurniture multi-agent workflow
 
-This directory is the shared, versioned handoff between Antigravity (architecture, backlog, plans, review) and Codex (implementation, QA, commit). `AGENTS.md` is the common policy. Chat messages and IDE-native artifacts do not replace these Markdown files.
+`AGENTS.md` is the shared policy. Antigravity owns planning/review; Codex owns implementation/tests and requests local commits after approval. The Node coordinator calls the real CLI processes sequentially. No IDE-to-IDE messaging, extra npm dependency, Production deployment, or database migration is part of this runner.
 
-## Queue and state
+## Run, monitor, stop, resume
 
-`BACKLOG.md` is the product queue. Each row has a unique task ID, priority (`P0`–`P3`), comma-separated dependencies or `-`, owner, lifecycle status, acceptance criteria, and commit hash. Only tasks within the user-approved roadmap may be added. `STATE.md` records the active task, phase, last completed task, next eligible task, blockers, and last successful commit. Update both at each handoff. A task directory is `.ai-collab/tasks/<task-id>/`; create it only when real work begins.
+Run from a **clean dedicated checkout** containing the approved roadmap and task artifacts. Existing uncommitted work is refused and preserved; do not reset or automatically stash another agent's work. Existing `BLOCKED` artifacts take precedence over a stale `READY` queue row. The current inquiry transaction blocker requires a planner/user decision.
 
-`PLAN.md` is written by Antigravity with `Status: DRAFT`, `APPROVED`, or `REVISED`. It contains scope, architecture, file ownership, acceptance criteria, checks, dependencies, and Production impact. The user approves the roadmap once; routine in-scope tasks do not require stepwise approval. New or materially revised scope returns to user approval before Codex works on it.
+```sh
+node .ai-collab/workflow.mjs doctor
+node .ai-collab/orchestrator.mjs run
+```
 
-`IMPLEMENTATION.md` is written by Codex with `Status: NOT_STARTED`, `IN_PROGRESS`, `READY_FOR_REVIEW`, or `BLOCKED`. Include implementation notes, command names and pass/fail results for lint, typecheck, tests and production build, risks, and these machine-readable lines near the top: `Changed paths: path/to/file, another/file`, `Commit: feat(scope): description`, and `Commit hash: -`. List every task-owned changed path, including deleted files, and no unrelated paths. `REVIEW.md` is written only by Antigravity with `Status: PENDING`, `CHANGES_REQUESTED`, or `APPROVED`; record acceptance-criteria decisions and actionable feedback. Codex must never create an Antigravity approval.
+In another terminal:
 
-## Handoff and retry
+```sh
+node .ai-collab/orchestrator.mjs status
+tail -f .ai-collab/.runtime/events.jsonl
+node .ai-collab/orchestrator.mjs stop
+node .ai-collab/orchestrator.mjs resume
+```
 
-Antigravity plans a `BACKLOG` task and moves it through `PLANNING` to `READY`. Codex takes the highest-priority `READY` task with every dependency `DONE`, moves it through `IN_PROGRESS` and `TESTING`, and hands over at `READY_FOR_REVIEW`. Antigravity reviews and either requests changes or approves. Codex fixes requested changes and resubmits; after two unsuccessful rounds on the same issue, mark `BLOCKED` and ask for a decision. Tests that fail or a missing review cannot produce `DONE`.
+`stop` creates a stop request checked while the child runs; the coordinator terminates its process group and saves a `STOPPED` checkpoint. Ctrl-C/SIGTERM use the same path. `resume` recovers that task, validates files and Git state, and does not duplicate an already verified commit. It refuses `BLOCKED`; diagnose and preserve the recorded work before an explicit planner/operator decision. A stale lock is recovered only through `resume` after its parent and child are both dead. Do not delete a live lock.
 
-After a valid approval, Codex stages only paths owned by that task, checks staged content and Git state, and commits without a separate user prompt. The implementation commit hash is written back to `IMPLEMENTATION.md` and `BACKLOG.md` in a separate small metadata commit: a commit cannot contain its own hash without changing that hash. The task then moves to `DONE`, and the next eligible task starts. Do not push or deploy automatically. If no eligible task remains, verify acceptance criteria, unresolved bugs, and the test suite, report and stop.
+`orchestrator.config.json` selects the CLI command arrays, timeout (default ten minutes per invocation/check), maximum three implementation/review rounds, and required checks. CLI authentication must already work. Codex uses `workspace-write` for implementation and `read-only` for the commit request, with `approval_policy=never` so unavailable privileges are denied. Antigravity uses plan mode, sandbox, supplied source/diff context and structured JSON without shell tools. If it needs more context or permission, the task becomes `BLOCKED`. No permission-skipping flags or global permission settings are added.
 
-`node .ai-collab/workflow.mjs doctor` validates the queue/state and reports local CLI availability; `node .ai-collab/workflow.mjs next` selects the next eligible `READY` task; `node .ai-collab/workflow.mjs complete <task-id>` requires approved plan/review artifacts, task-owned Git paths, fresh lint/typecheck/tests/build, staged-secret checks, two local commits, and next-task selection. Codex runs `complete` immediately after a genuine Antigravity approval. The helper uses `.ai-collab/.lock` to prevent two coordinators from committing at once. It checks the review file's status but cannot prove who wrote it; a coordinator must obtain that file from an actual Antigravity run. It does not invoke either AI agent or run as a background daemon.
+## Queue and artifacts
 
-## Actual automation boundary
+`BACKLOG.md` is a seven-column Markdown table: Task ID, Priority (`P0`–`P3`), Dependencies (comma-separated IDs or `-`), Owner, Status, Acceptance criteria, Commit hash. It must have `Roadmap approval: APPROVED`. IDs are unique lowercase letters/digits/hyphens. Use simple single-line table cells without embedded pipes. Only add tasks from the approved roadmap.
 
-[Antigravity CLI headless mode](https://www.antigravity.google/docs/cli/headless/) supports `agy -p` with JSON output; [official OpenAI documentation](https://developers.openai.com/blog/codex-as-a-platform) identifies `codex exec` as the noninteractive Codex interface. The IDE chat panels do not automatically exchange messages. A future coordinator may invoke the two CLI processes, validate their exit/output and artifacts after each phase, enforce retry limits, and stop on approval or safety failures. Antigravity CLI is not installed in this workspace at setup time, so a two-agent loop has **not** been run or verified. Installing/authenticating `agy` and testing a harmless end-to-end task are prerequisites before claiming unattended operation.
+Each real task has `.ai-collab/tasks/<task-id>/PLAN.md`, `IMPLEMENTATION.md`, and `REVIEW.md`. The coordinator writes these from actual agent results, retaining private JSON execution receipts. `PLAN.md` has `Status: APPROVED` only after a successful Antigravity planning invocation; it lists exact file ownership. `IMPLEMENTATION.md` records actual check results and the implementation commit hash. `REVIEW.md` contains Antigravity's decision and invocation number. Codex must not invent approval.
 
-Until then, use file handoff: ask Antigravity to update `BACKLOG.md`, `PLAN.md`, and `REVIEW.md`; have Codex read the next `READY` task, implement and verify it, then commit only after genuine approval. Both agents must inspect Git status before editing. Reserve file ownership in the task plan and use a single-process lock for any future coordinator. Preserve unexpected edits and mark conflicts `BLOCKED`; never reset or overwrite them.
+The lifecycle is `BACKLOG → PLANNING → READY → IN_PROGRESS → TESTING → READY_FOR_REVIEW → APPROVED → COMMITTED → DONE`; feedback goes through `CHANGES_REQUESTED → IN_PROGRESS`. The runner chooses the highest-priority eligible `READY` task, then an eligible `BACKLOG` task for planning. All dependencies must be `DONE`. It never clears `BLOCKED`, and it stops when there is no eligible work. `NO_ELIGIBLE_TASK` can mean unresolved blockers, not that the whole roadmap is complete.
 
-When `agy` is installed and authenticated, a coordinator can run this bounded loop: (1) acquire the lock and confirm a clean, known Git baseline and approved roadmap; (2) select the highest-priority eligible task; (3) call `agy -p ... --output-format json` to produce or revise `PLAN.md`; (4) validate plan status and hand it to `codex exec` for implementation; (5) independently run the required checks and inspect `IMPLEMENTATION.md`; (6) call `agy -p ... --output-format json` to review and write `REVIEW.md`; (7) send actionable feedback to Codex for at most two rounds; (8) only after a genuine `APPROVED` review, invoke `workflow.mjs complete`; (9) repeat until no eligible task remains. Validate the Antigravity JSON `status` and resulting files, not just process exit code: headless permission denials can be reported while the process exits successfully. Stop on missing credentials, unowned edits, failed checks, unavailable approvals, or a blocked dependency. This is a design, not an active daemon or a tested cross-agent integration.
+`STATE.md` is the human-readable pointer. `.runtime/checkpoint.json` stores restart information; `.runtime/events.jsonl` stores handoff events. Raw agent/check logs and receipts are private local files ignored by Git. Do not commit these logs, which may contain tool output or repository context. The `.lock` directory prevents concurrent coordinators; agents and humans must also respect file ownership.
 
-Production database/data, Auth/RLS, environment/secrets, Cloudinary credentials, and deploys require separate user approval under `AGENTS.md`.
+## Verification and commits
+
+The coordinator validates CLI exit status, JSON envelopes/schema fields, actual changed files, independent check exit codes, and Git state. It detects unowned edits, source changes after tests/review, modified npm check scripts, unexpected staging or commits, and failed/denied CLI runs. Reviews receive the actual plan, diff, current owned files and check evidence. A review context above the bounded input limit is blocked and needs task splitting.
+
+Codex's final read-only invocation returns a structured `COMMIT_REQUESTED` object bound to the approved parent, tree and message. The coordinator's narrow Git executor performs that exact local commit and verifies the resulting parent/tree and clean worktree. This is deliberate: the model never receives elevated arbitrary shell permission to commit. A second metadata commit records the first hash in the Markdown artifacts; a commit cannot contain its own hash. No automatic push occurs. The next eligible task starts immediately.
+
+`workflow.mjs next` retains queue inspection. `workflow.mjs complete <id>` now resumes a matching approved coordinator checkpoint; a manually written APPROVED file alone cannot trigger automatic commit. This prevents the legacy helper from bypassing real CLI receipts/checks.
+
+## Proving the runner
+
+```sh
+node --test .ai-collab/orchestrator*.test.mjs
+node .ai-collab/dry-run.mjs
+```
+
+The dry-run creates a fresh temporary Git repository, copies only the orchestration tools, and calls both real CLIs. Its harmless task creates one proof JSON file, passes independent fixture checks, receives a real Antigravity review, and produces real local task/metadata commits. It copies no application source or credentials, verifies the original repository is unchanged, and prints the proof repository and commit hashes. Those fixture checks prove orchestration; they do not replace application lint/typecheck/tests/build for product tasks.
+
+The deterministic tests cover dependencies, retry exhaustion, false commit requests, source changes after approval, unowned review edits, stop/resume, locks and timeouts. They use fake processes only for failure injection; readiness additionally requires the real-CLI dry-run.
+
+This is cooperative local automation, not an OS-level protection against arbitrary tools outside the coordinator. Configure CLI/MCP access conservatively, retain the sandbox defaults, and treat Production approvals as separate. The runner never runs migrations or deployments itself.

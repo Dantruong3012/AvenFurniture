@@ -23,7 +23,7 @@ Use `.ai-collab/BACKLOG.md` as the task queue and `.ai-collab/STATE.md` as the c
 
 The allowed lifecycle is `BACKLOG → PLANNING → READY → IN_PROGRESS → TESTING → READY_FOR_REVIEW → APPROVED → COMMITTED → DONE`. Review feedback follows `READY_FOR_REVIEW → CHANGES_REQUESTED → IN_PROGRESS`; an unrecoverable issue goes to `BLOCKED`. No `DONE` without passing required checks, an Antigravity review artifact marked `APPROVED`, and a task commit. Never represent one agent's own output as the other agent's review.
 
-Antigravity may mark a plan `APPROVED` only for work inside the user's approved roadmap. A material scope or architecture change is `REVISED` until the user approves the changed scope. Codex records blockers in `IMPLEMENTATION.md` for Antigravity to resolve. Limit repeated fixes to two review rounds for the same issue; then mark `BLOCKED` and request a scope or architecture decision.
+Antigravity may mark a plan `APPROVED` only for work inside the user's approved roadmap. A material scope or architecture change is `REVISED` until the user approves the changed scope. Codex records blockers in `IMPLEMENTATION.md` for Antigravity to resolve. Limit implementation/review to three rounds per task; then mark `BLOCKED` and request a scope or architecture decision. A `BLOCKED` artifact overrides a stale `READY` backlog row and cannot be cleared automatically.
 
 After `DONE`, select the highest-priority `READY` task whose dependencies are `DONE`. If none are ready, Antigravity can plan an approved `BACKLOG` task. Do not invent new features or pass blocked dependencies. When the approved backlog is exhausted, verify acceptance criteria, unresolved bugs, and the test suite, report completion, and stop.
 
@@ -32,6 +32,8 @@ After `DONE`, select the highest-priority `READY` task whose dependencies are `D
 After Antigravity approval, Codex confirms all required checks pass, inspects Git status and diff, scans intended staged blobs for secrets, stages only task-owned paths, and creates a conventional commit: `feat(scope): description`, `fix(scope): description`, `refactor(scope): description`, `test(scope): description`, or `docs(scope): description`. Record the hash in `IMPLEMENTATION.md` and `BACKLOG.md`, then mark `DONE`. A commit does not authorize push or deployment. Never use blind `git add .`, force-push, hard-reset, or overwrite unrelated work.
 
 Use a task-specific branch or an explicit file-ownership list, plus `.ai-collab/.lock` for a single local coordinator. Two agents must not edit the same file concurrently. If unexpected changes, ownership conflicts, or Git conflicts appear, preserve all data and mark the task `BLOCKED`. Reviewer edits belong only in the task's `REVIEW.md` and planning/backlog artifacts; implementation edits belong to Codex.
+
+For unattended execution, use `.ai-collab/orchestrator.mjs`. Antigravity returns structured plans/reviews from supplied source context; Codex edits only owned paths in `workspace-write` with unavailable approvals denied. The coordinator runs required checks independently, binds review to the tested files, and accepts a structured commit request from read-only Codex. Its fixed Git executor stages only task paths and verifies commit parent/tree. Never bypass permissions or treat an agent's PASS/APPROVED response alone as proof of execution. Preserve checkpoints on stop; `resume` cannot clear `BLOCKED`.
 
 ## Production safety
 

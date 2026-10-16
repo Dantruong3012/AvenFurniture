@@ -1,14 +1,14 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { assertNoSecrets } from './orchestrator-core.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const workspace = join(root, '.ai-collab');
 const backlogPath = join(workspace, 'BACKLOG.md');
 const statePath = join(workspace, 'STATE.md');
-const lockPath = join(workspace, '.lock');
 const statuses = new Set(['BACKLOG', 'PLANNING', 'READY', 'IN_PROGRESS', 'TESTING', 'READY_FOR_REVIEW', 'CHANGES_REQUESTED', 'APPROVED', 'COMMITTED', 'DONE', 'BLOCKED']);
 const taskIdPattern = /^[a-z0-9][a-z0-9-]*$/;
 
@@ -49,8 +49,14 @@ function backlog() {
   }
   return { content, lines, tasks };
 }
+function hasBlocker(task) {
+  return task.status === 'BLOCKED' || ['PLAN.md', 'IMPLEMENTATION.md', 'REVIEW.md'].some((name) => {
+    const path = taskPath(task.id, name);
+    return existsSync(path) && (statusOf(path) === 'BLOCKED' || (name === 'PLAN.md' && statusOf(path) === 'REVISED'));
+  });
+}
 function nextTask(tasks) {
-  return tasks.filter((task) => task.status === 'READY' && task.dependencies.every((dep) => tasks.find((candidate) => candidate.id === dep)?.status === 'DONE'))
+  return tasks.filter((task) => task.status === 'READY' && !hasBlocker(task) && task.dependencies.every((dep) => tasks.some((candidate) => candidate.id === dep && candidate.status === 'DONE' && !hasBlocker(candidate))))
     .sort((a, b) => a.priority.localeCompare(b.priority) || a.lineNumber - b.lineNumber)[0] ?? null;
 }
 function setTaskRow(data, task, status, hash = task.hash) {
@@ -62,13 +68,6 @@ function setTaskRow(data, task, status, hash = task.hash) {
 }
 function statusOf(path) { return field(read(path), 'Status'); }
 function taskPath(id, filename) { return join(workspace, 'tasks', id, filename); }
-function changedPaths(content) {
-  const value = field(content, 'Changed paths');
-  if (!value) fail('IMPLEMENTATION.md needs Changed paths: path, path');
-  const paths = value.split(',').map((part) => part.trim());
-  if (paths.some((path) => !path || path.startsWith('/') || path.includes('..') || path.startsWith('.env') || path.includes('\\') || path.includes('|'))) fail('Unsafe Changed paths manifest');
-  return [...new Set(paths)];
-}
 function changedWorkingPaths() {
   const output = command('git', ['status', '--porcelain=v1', '-z', '--untracked-files=all'], { capture: true });
   const entries = output.split('\0').filter(Boolean);
@@ -86,7 +85,7 @@ function scanStaged() {
     if (/(^|\/)\.env|\.pem$|\.key$|credentials|secret/i.test(path)) fail(`Sensitive staged path: ${path}`);
     const blob = spawnSync('git', ['show', `:${path}`], { cwd: root, encoding: 'utf8' });
     if (blob.status !== 0) continue; // deleted path
-    if (/sb_secret_[A-Za-z0-9_-]{12,}|sk_live_[A-Za-z0-9_-]{12,}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/i.test(blob.stdout)) fail(`Potential secret in staged path: ${path}`);
+    assertNoSecrets(blob.stdout, path);
   }
   command('git', ['diff', '--cached', '--check'], { capture: true });
 }
@@ -95,59 +94,24 @@ function doctor() {
   const approval = field(data.content, 'Roadmap approval');
   const state = read(statePath);
   for (const name of ['Active task', 'Current phase', 'Last completed task', 'Next task', 'Blockers', 'Last successful commit']) if (!field(state, name)) fail(`STATE.md missing ${name}`);
-  const agy = spawnSync('agy', ['--version'], { encoding: 'utf8' });
+  const agy = spawnSync('agy', ['--help'], { encoding: 'utf8' });
   const codex = spawnSync('codex', ['--version'], { encoding: 'utf8' });
   const next = nextTask(data.tasks);
   console.log(JSON.stringify({ backlogTasks: data.tasks.length, roadmapApproval: approval, nextReadyTask: next?.id ?? null, antigravityCli: agy.error ? 'missing' : agy.status === 0 ? 'available' : 'unverified', codexCli: codex.error ? 'missing' : codex.status === 0 ? 'available' : 'unverified' }, null, 2));
 }
 function complete(id) {
   if (!taskIdPattern.test(id ?? '')) fail('Provide a valid task ID');
-  const data = backlog();
-  const task = data.tasks.find((item) => item.id === id);
-  if (!task || task.status !== 'APPROVED') fail(`Task ${id} is not APPROVED in BACKLOG.md`);
-  if (task.dependencies.some((dep) => data.tasks.find((item) => item.id === dep)?.status !== 'DONE')) fail('Dependencies are not DONE');
-  if (field(data.content, 'Roadmap approval') !== 'APPROVED') fail('Roadmap is not approved');
-  const planPath = taskPath(id, 'PLAN.md');
-  const implPath = taskPath(id, 'IMPLEMENTATION.md');
-  const reviewPath = taskPath(id, 'REVIEW.md');
-  for (const path of [planPath, implPath, reviewPath]) if (!existsSync(path)) fail(`Missing ${path}`);
-  if (statusOf(planPath) !== 'APPROVED' || statusOf(implPath) !== 'READY_FOR_REVIEW' || statusOf(reviewPath) !== 'APPROVED') fail('Plan, implementation, or Antigravity review lacks approval');
-  const impl = read(implPath);
-  const title = field(impl, 'Commit');
-  if (!/^(feat|fix|refactor|test|docs)\([a-z0-9-]+\): .{5,}$/.test(title ?? '')) fail('IMPLEMENTATION.md needs a conventional Commit: title');
-  const owned = changedPaths(impl);
-  const allowed = new Set([...owned, ...[planPath, implPath, reviewPath, backlogPath, statePath].map((path) => path.slice(root.length + 1))]);
-  const existing = changedWorkingPaths();
-  const unexpected = existing.filter((path) => !allowed.has(path));
-  if (unexpected.length) fail(`Unowned working-tree changes: ${unexpected.join(', ')}`);
-  if (git('diff', '--cached', '--name-only')) fail('Index already contains staged changes');
-  if (!existing.length) fail('No task changes to commit');
-  mkdirSync(lockPath); // atomic single-coordinator lock; never remove another process's lock
-  try {
-    for (const script of ['lint', 'typecheck', 'test', 'build']) command('npm', ['run', script]);
-    command('git', ['add', '--', ...existing]);
-    scanStaged();
-    if (!git('diff', '--cached', '--name-only')) fail('Nothing was staged');
-    command('git', ['var', 'GIT_AUTHOR_IDENT'], { capture: true });
-    command('git', ['commit', '-m', title]);
-    const hash = git('rev-parse', 'HEAD');
-    writeFileSync(implPath, replaceField(impl, 'Commit hash', hash));
-    setTaskRow(data, task, 'DONE', hash);
-    let state = read(statePath);
-    state = replaceField(state, 'Active task', '-');
-    state = replaceField(state, 'Current phase', 'IDLE');
-    state = replaceField(state, 'Last completed task', id);
-    state = replaceField(state, 'Last successful commit', hash);
-    state = replaceField(state, 'Next task', nextTask(data.tasks.map((item) => item.id === id ? { ...item, status: 'DONE' } : item))?.id ?? '-');
-    writeFileSync(statePath, state);
-    command('git', ['add', '--', implPath.slice(root.length + 1), backlogPath.slice(root.length + 1), statePath.slice(root.length + 1)]);
-    scanStaged();
-    command('git', ['commit', '-m', `docs(agents): record ${id} completion`]);
-    console.log(JSON.stringify({ task: id, implementationCommit: hash, metadataCommit: git('rev-parse', 'HEAD'), nextTask: field(state, 'Next task') }, null, 2));
-  } finally { rmSync(lockPath, { recursive: true }); }
+  const checkpointPath = join(workspace, '.runtime', 'checkpoint.json');
+  if (!existsSync(checkpointPath)) fail('No coordinator receipts. Start orchestrator.mjs run; Markdown approval alone cannot authorize automatic commit');
+  const checkpoint = JSON.parse(read(checkpointPath));
+  if (checkpoint.task?.id !== id || !['APPROVED', 'COMMITTED'].includes(checkpoint.phase) || checkpoint.status === 'BLOCKED') fail('Task has no resumable approved coordinator checkpoint');
+  const result = spawnSync(process.execPath, [join(workspace, 'orchestrator.mjs'), 'resume'], { cwd: root, stdio: 'inherit' });
+  if (result.error || result.status !== 0) fail('Coordinator did not complete; inspect orchestrator status');
 }
 
-try {
+export { root, workspace, backlog, nextTask, hasBlocker, field, replaceField, setTaskRow, taskPath, statusOf, changedWorkingPaths, scanStaged, git };
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) try {
   const [action, id] = process.argv.slice(2);
   if (action === 'doctor') doctor();
   else if (action === 'next') { const task = nextTask(backlog().tasks); console.log(task?.id ?? '-'); }
