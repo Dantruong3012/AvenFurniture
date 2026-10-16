@@ -21,8 +21,11 @@ export function assessQueue({ checkpoint, tasks, blockedArtifacts = [], branch, 
     return { status: 'RESUME', task: checkpoint.task?.id };
   }
   if (blockedArtifacts.length) return { status: 'BLOCKED', task: blockedArtifacts[0], reason: 'Blocked task artifact requires explicit independent-task safety review' };
+  // The coordinator validates every dirty path against the saved checkpoint
+  // baseline and exact task ownership. A stopped implementation is normally dirty.
+  if (checkpoint && ['STOPPED', 'RUNNING'].includes(checkpoint.status)) return { status: 'RESUME', task: checkpoint.task?.id };
+  if (checkpoint && !['DONE', 'IDLE'].includes(checkpoint.status)) return { status: 'BLOCKED', task: checkpoint.task?.id, reason: 'Unknown checkpoint status; inspect before resuming' };
   if (dirty) return { status: 'BLOCKED', reason: 'Working tree or index is dirty; preserve existing work' };
-  if (checkpoint && !['DONE', 'IDLE'].includes(checkpoint.status)) return { status: 'RESUME', task: checkpoint.task?.id };
   const eligible = tasks.filter((task) => ['READY', 'BACKLOG'].includes(task.status) && task.dependencies.every((id) => tasks.some((dep) => dep.id === id && dep.status === 'DONE')))
     .sort((a, b) => a.priority.localeCompare(b.priority) || a.lineNumber - b.lineNumber);
   if (eligible.length) return { status: 'RUN', task: eligible[0].id };

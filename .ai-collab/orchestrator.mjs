@@ -29,6 +29,11 @@ const architecturePlanReviewPath = '.ai-collab/tasks/orchestrator-architecture-p
 const architecturePlanRunnerPaths = new Set(['.ai-collab/orchestrator.mjs', '.ai-collab/orchestrator.integration.test.mjs', '.ai-collab/README.md', '.ai-collab/tasks/orchestrator-architecture-plan-recovery/PLAN.md', '.ai-collab/tasks/orchestrator-architecture-plan-recovery/IMPLEMENTATION.md', architecturePlanReviewPath]);
 const gitPermissionReviewPath = '.ai-collab/tasks/orchestrator-git-permission-recovery/REVIEW.md';
 const gitPermissionRunnerPaths = new Set(['.ai-collab/orchestrator.mjs', '.ai-collab/orchestrator.integration.test.mjs', '.ai-collab/README.md', '.ai-collab/tasks/orchestrator-git-permission-recovery/PLAN.md', '.ai-collab/tasks/orchestrator-git-permission-recovery/IMPLEMENTATION.md', gitPermissionReviewPath]);
+const stoppedPlanRecoveryTask = 'autopilot-checkpoint-resume';
+const stoppedPlanProposalPath = `.ai-collab/tasks/${stoppedPlanRecoveryTask}/REVISED-CONSULTANT-PLAN.md`;
+const stoppedPlanReviewPath = `.ai-collab/tasks/${stoppedPlanRecoveryTask}/REVIEW.md`;
+const stoppedPlanRunnerPaths = new Set(['.ai-collab/autopilot-core.mjs', '.ai-collab/autopilot.test.mjs', '.ai-collab/orchestrator.mjs', '.ai-collab/orchestrator.integration.test.mjs', '.ai-collab/AUTOPILOT.md', '.ai-collab/README.md', `.ai-collab/tasks/${stoppedPlanRecoveryTask}/PLAN.md`, `.ai-collab/tasks/${stoppedPlanRecoveryTask}/IMPLEMENTATION.md`, stoppedPlanReviewPath, stoppedPlanProposalPath]);
+const consultantRevisedPaths = ['components/layout/header.tsx', 'components/admin/catalog-shell.tsx', 'app/consultants/page.tsx', 'app/admin/(protected)/consultants/page.tsx', 'components/consultant/consultant-card.tsx', 'components/consultant/consultant-grid.tsx', 'components/consultant/zalo-contact-button.tsx', 'components/admin/consultant-form.tsx', 'components/admin/consultant-management.tsx', 'lib/consultants/actions.ts', 'lib/consultants/queries.ts', 'lib/repositories/supabaseConsultantRepository.ts', 'lib/validation/consultant.ts', 'tests/admin-consultant.test.mjs', 'tests/consultant.test.mjs'];
 const architectureBlocker = 'codex: The approved plan requires statuses incompatible with the existing database constraint; resolution exceeds the authorized paths.';
 const inquiryStatuses = ['new', 'consulting', 'completed', 'cancelled'];
 const architecturePlanningError = 'Antigravity Planning changed approved inquiry-status semantics';
@@ -247,6 +252,62 @@ function replan() {
     transition('PLANNING');
     event('REPLAN_READY', { previousSequence: checkpoint.sequence, reviewedPaths: committed });
   } finally { rmSync(lock, { recursive: true }); }
+}
+function recoverStoppedPlan() {
+  acquireLock(lock, true);
+  try {
+    if (!existsSync(checkpointPath)) throw new Error('No checkpoint to recover');
+    checkpoint = JSON.parse(read(checkpointPath));
+    const id = checkpoint.task?.id;
+    if (id !== 'storefront-consultant-zalo' || checkpoint.status !== 'STOPPED' || checkpoint.phase !== 'IN_PROGRESS' || checkpoint.round !== 1 || checkpoint.error !== 'STOPPED' || !checkpoint.planReceipt || checkpoint.paths?.length !== 16) throw new Error('Only the saved stopped consultant checkpoint can use this recovery');
+    const planPath = `.ai-collab/tasks/${id}/PLAN.md`;
+    const data = backlog();
+    const state = read(join(workspace, 'STATE.md'));
+    if (data.tasks.find((task) => task.id === id)?.status !== 'IN_PROGRESS' || field(data.content, 'Roadmap approval') !== 'APPROVED' || field(state, 'Active task') !== id || field(state, 'Current phase') !== 'IN_PROGRESS') throw new Error('Workflow state differs from stopped task');
+    if (checkpoint.configDigest !== configDigest || checkpoint.scriptsDigest !== digest(requiredScripts())) throw new Error('Runner configuration or required checks changed');
+    const receipt = checkpoint.planReceipt;
+    const receiptPath = join(runtime, `${id}-${receipt.sequence}-plan.receipt.json`);
+    if (!existsSync(receiptPath) || digest(JSON.parse(read(receiptPath))) !== digest(receipt) || receipt.agent !== 'antigravity' || receipt.operation !== 'plan' || receipt.exitCode !== 0 || receipt.status !== 'READY' || receipt.result?.status !== 'READY' || receipt.inputDigest !== receipt.outputDigest || JSON.stringify(validatePaths(receipt.result.paths)) !== JSON.stringify(checkpoint.paths)) throw new Error('Original Antigravity Planning receipt is missing or changed');
+    if (git('diff', '--cached', '--name-only')) throw new Error('Unexpected staged changes before stopped-plan recovery');
+    const head = git('rev-parse', 'HEAD');
+    if (git('rev-parse', `${head}^`) !== checkpoint.baseHead) throw new Error('Recovery requires exactly one reviewed runner commit after the stopped checkpoint');
+    const committed = git('diff', '--name-only', checkpoint.baseHead, head).split('\n').filter(Boolean);
+    if (!committed.includes('.ai-collab/orchestrator.mjs') || !committed.includes(stoppedPlanReviewPath) || !committed.includes(stoppedPlanProposalPath) || committed.some((path) => !stoppedPlanRunnerPaths.has(path))) throw new Error('Runner upgrade contains unreviewed or missing paths');
+    const proposal = git('show', `${head}:${stoppedPlanProposalPath}`);
+    const review = git('show', `${head}:${stoppedPlanReviewPath}`);
+    if (!proposal.startsWith(`# Plan: ${id}\n`) || field(proposal, 'Status') !== 'APPROVED' || !/^Planner: Antigravity\b/m.test(proposal) || field(proposal, 'Task') !== id || field(review, 'Status') !== 'APPROVED' || !/^Reviewer: Antigravity\b/m.test(review) || field(review, 'Reviewed stopped HEAD') !== checkpoint.baseHead || field(review, 'Reviewed task') !== id || field(review, 'Approved consultant plan digest') !== digest(`${proposal}\n`)) throw new Error('Matching Antigravity plan and review are required');
+    const owned = proposal.match(/^Owned paths: (.+)$/m)?.[1]?.split(',').map((path) => path.trim());
+    if (!owned || JSON.stringify(validatePaths(owned)) !== JSON.stringify(consultantRevisedPaths)) throw new Error('Revised consultant ownership is not the reviewed schema-compatible set');
+    const requiredFacts = ['admin_profiles.user_id', 'enabled', 'false', 'list_public_consultants', 'No live database writes'];
+    if (!requiredFacts.every((fact) => proposal.toLowerCase().includes(fact.toLowerCase())) || !proposal.includes('Do not claim biography or specialty fields exist')) throw new Error('Revised plan does not preserve existing-schema constraints');
+    const originalPlan = read(taskPath(id, 'PLAN.md'));
+    if (!originalPlan.startsWith(`# Plan: ${id}\n`) || field(originalPlan, 'Status') !== 'APPROVED' || !originalPlan.includes('specialties, bios') || !originalPlan.includes(`Owned paths: ${checkpoint.paths.join(', ')}`)) throw new Error('Original plan differs from saved stopped Planning evidence');
+    if (existsSync(taskPath(id, 'IMPLEMENTATION.md'))) throw new Error('Interrupted implementation artifact needs inspection before recovery');
+    const metadata = new Set(['.ai-collab/BACKLOG.md', '.ai-collab/STATE.md', planPath]);
+    if (changedWorkingPaths().some((path) => !metadata.has(path))) throw new Error('Uncommitted changes outside stopped task metadata');
+    const current = snapshot(root);
+    if (changes(checkpoint.baseline, current).some((path) => !metadata.has(path) && !stoppedPlanRunnerPaths.has(path))) throw new Error('Application source changed since stopped checkpoint');
+    planningContext(proposal);
+    const archive = join(runtime, `${id}-${checkpoint.sequence}-stopped-original-plan.md`);
+    if (existsSync(archive)) throw new Error('Original plan archive already exists');
+    const original = { status: checkpoint.status, phase: checkpoint.phase, round: checkpoint.round, error: checkpoint.error, paths: checkpoint.paths, planReceipt: receipt, sequence: checkpoint.sequence, baseHead: checkpoint.baseHead, originalPlanDigest: digest(originalPlan) };
+    writeFileSync(archive, originalPlan, { mode: 0o600 });
+    artifact('PLAN.md', `${proposal}\n`);
+    artifact('IMPLEMENTATION.md', `# Implementation: ${id}\n\nStatus: NOT_STARTED\n\nReplanning under the reviewed existing-schema consultant plan. Previous Planning receipt and interrupted-turn evidence remain in the checkpoint history and private archive.\n`);
+    checkpoint.replanHistory = [...(checkpoint.replanHistory ?? []), original];
+    checkpoint.paths = [];
+    checkpoint.approvedReplanPaths = owned;
+    checkpoint.planReceipt = null;
+    checkpoint.implementation = null;
+    checkpoint.feedback = null;
+    checkpoint.error = null;
+    checkpoint.round = 0;
+    checkpoint.baseHead = head;
+    checkpoint.baseline = snapshot(root);
+    checkpoint.runnerUpgrade = { from: original.baseHead, to: head, paths: committed };
+    transition('PLANNING');
+    event('STOPPED_PLAN_RECOVERY_READY', { previousSequence: original.sequence, reviewedCommit: head });
+  } finally { releaseLock(lock); }
 }
 function recoverArchitecture() {
   acquireLock(lock, true);
@@ -732,6 +793,7 @@ try {
   else if (action === 'recover-quota') recoverQuota();
   else if (action === 'recover-plan-path') recoverPlanPath();
   else if (action === 'replan') replan();
+  else if (action === 'recover-stopped-plan') recoverStoppedPlan();
   else if (action === 'recover-architecture') recoverArchitecture();
   else if (action === 'recover-architecture-plan') recoverArchitecturePlan();
   else if (action === 'recover-git-permission') recoverGitPermission();
@@ -745,5 +807,5 @@ try {
     console.log(JSON.stringify({ checkpoint: state ? { task: state.task?.id ?? null, status: state.status, phase: state.phase, round: state.round, error: state.error, quota: state.quota ?? null, lastTokenUsage: state.lastTokenUsage ?? null } : null, handoff: existsSync(join(runtime, 'HANDOFF.md')) ? '.ai-collab/.runtime/HANDOFF.md' : null, next: select()?.id ?? null, paused: tasks.filter((task) => task.status === 'PAUSED_QUOTA').map((task) => task.id), blocked: tasks.filter((task) => task.status !== 'PAUSED_QUOTA' && hasBlocker(task)).map((task) => task.id), lock: existsSync(join(lock, 'owner.json')) ? JSON.parse(read(join(lock, 'owner.json'))) : null, receipts: existsSync(runtime) ? readdirSync(runtime).filter((name) => name.endsWith('.receipt.json')).length : 0 }, null, 2));
   }
   else if (action === 'stop') { mkdirSync(runtime, { recursive: true }); writeFileSync(stopFile, 'stop\n'); console.log('Stop requested; active child will be terminated and checkpoint preserved.'); }
-  else throw new Error('Usage: node .ai-collab/orchestrator.mjs run|resume [--quota-ready]|recover-quota|recover-plan-path|replan|recover-architecture|recover-architecture-plan|recover-git-permission|status|stop|doctor|release-status|release-push');
+  else throw new Error('Usage: node .ai-collab/orchestrator.mjs run|resume [--quota-ready]|recover-quota|recover-plan-path|replan|recover-stopped-plan|recover-architecture|recover-architecture-plan|recover-git-permission|status|stop|doctor|release-status|release-push');
 } catch (error) { console.error(`Orchestrator stopped: ${error.message}`); process.exitCode = 1; }

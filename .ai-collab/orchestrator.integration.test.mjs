@@ -419,6 +419,74 @@ test('fresh Planning cannot expand or replace approved replan ownership',async()
  }finally{rmSync(dir,{recursive:true});}
 });
 
+const consultantPaths = ['components/layout/header.tsx', 'components/admin/catalog-shell.tsx', 'app/consultants/page.tsx', 'app/admin/(protected)/consultants/page.tsx', 'components/consultant/consultant-card.tsx', 'components/consultant/consultant-grid.tsx', 'components/consultant/zalo-contact-button.tsx', 'components/admin/consultant-form.tsx', 'components/admin/consultant-management.tsx', 'lib/consultants/actions.ts', 'lib/consultants/queries.ts', 'lib/repositories/supabaseConsultantRepository.ts', 'lib/validation/consultant.ts', 'tests/admin-consultant.test.mjs', 'tests/consultant.test.mjs'];
+async function stoppedConsultantFixture(reason = 'valid') {
+  const dir = fixture('stop-resume');
+  const active = run(dir); await waitFor(dir, 'implement'); await run(dir, 'stop');
+  assert.equal((await active).code, 1);
+  const id = 'storefront-consultant-zalo';
+  const oldPaths = [...consultantPaths.filter((path) => path !== 'components/admin/catalog-shell.tsx'), 'lib/supabase/database.types.ts', 'lib/types.ts'];
+  const saved = checkpoint(dir);
+  saved.task.id = id; saved.paths = oldPaths; saved.planReceipt.result.paths = oldPaths;
+  writeFileSync(join(dir, '.ai-collab/.runtime/checkpoint.json'), JSON.stringify(saved));
+  writeFileSync(join(dir, `.ai-collab/.runtime/${id}-1-plan.receipt.json`), JSON.stringify(saved.planReceipt));
+  const backlogPath = join(dir, '.ai-collab/BACKLOG.md');
+  writeFileSync(backlogPath, readFileSync(backlogPath, 'utf8').replace('| t1 |', `| ${id} |`));
+  const statePath = join(dir, '.ai-collab/STATE.md');
+  writeFileSync(statePath, readFileSync(statePath, 'utf8').replace('Active task: t1', `Active task: ${id}`));
+  rmSync(join(dir, '.ai-collab/tasks/t1/PLAN.md'));
+  mkdirSync(join(dir, `.ai-collab/tasks/${id}`), { recursive: true });
+  writeFileSync(join(dir, `.ai-collab/tasks/${id}/PLAN.md`), `# Plan: ${id}\n\nStatus: APPROVED\n\nOriginal plan requires specialties, bios.\n\nOwned paths: ${oldPaths.join(', ')}\n`);
+  const upgradeDir = join(dir, '.ai-collab/tasks/autopilot-checkpoint-resume');
+  mkdirSync(upgradeDir, { recursive: true });
+  const proposal = readFileSync(join(source, 'tasks/autopilot-checkpoint-resume/REVISED-CONSULTANT-PLAN.md'), 'utf8');
+  writeFileSync(join(upgradeDir, 'REVISED-CONSULTANT-PLAN.md'), proposal);
+  const proposalDigest = createHash('sha256').update(JSON.stringify(proposal)).digest('hex');
+  writeFileSync(join(upgradeDir, 'REVIEW.md'), `# Review: autopilot-checkpoint-resume\n\nStatus: ${reason === 'unapproved-review' ? 'CHANGES_REQUESTED' : 'APPROVED'}\nReviewer: Antigravity\nReviewed stopped HEAD: ${saved.baseHead}\nReviewed task: ${id}\nApproved consultant plan digest: ${reason === 'wrong-digest' ? '0'.repeat(64) : proposalDigest}\n`);
+  const runner = join(dir, '.ai-collab/orchestrator.mjs');
+  writeFileSync(runner, readFileSync(runner, 'utf8') + '\n// reviewed stopped-plan recovery fixture\n');
+  if (reason === 'committed-source') {
+    writeFileSync(join(dir, 'app.js'), 'unreviewed application change\n');
+    gitCall(dir, 'add', 'app.js');
+  }
+  gitCall(dir, 'add', '.ai-collab/orchestrator.mjs', '.ai-collab/tasks/autopilot-checkpoint-resume/REVIEW.md', '.ai-collab/tasks/autopilot-checkpoint-resume/REVISED-CONSULTANT-PLAN.md');
+  gitCall(dir, 'commit', '-qm', 'fix(orchestrator): reviewed stopped-plan recovery');
+  if (reason === 'dirty-source') writeFileSync(join(dir, 'app.js'), 'unreviewed dirty source\n');
+  if (reason === 'staged') { writeFileSync(join(dir, 'staged.js'), 'staged source\n'); gitCall(dir, 'add', 'staged.js'); }
+  if (reason === 'changed-original-plan') writeFileSync(join(dir, `.ai-collab/tasks/${id}/PLAN.md`), 'changed original plan\n');
+  return dir;
+}
+test('reviewed stopped consultant recovery preserves evidence and reruns Antigravity Planning', async () => {
+  const dir = await stoppedConsultantFixture();
+  try {
+    const prior = checkpoint(dir);
+    const originalPlan = readFileSync(join(dir, '.ai-collab/tasks/storefront-consultant-zalo/PLAN.md'), 'utf8');
+    const receipt = readFileSync(join(dir, '.ai-collab/.runtime/storefront-consultant-zalo-1-plan.receipt.json'), 'utf8');
+    const recovered = await run(dir, 'recover-stopped-plan'); assert.equal(recovered.code, 0, recovered.output);
+    const now = checkpoint(dir);
+    assert.equal(now.phase, 'PLANNING'); assert.equal(now.status, 'RUNNING'); assert.deepEqual(now.approvedReplanPaths, consultantPaths);
+    assert.deepEqual(now.replanHistory[0].planReceipt, prior.planReceipt);
+    assert.equal(readFileSync(join(dir, '.ai-collab/.runtime/storefront-consultant-zalo-1-plan.receipt.json'), 'utf8'), receipt);
+    assert.equal(readFileSync(join(dir, '.ai-collab/.runtime/storefront-consultant-zalo-2-stopped-original-plan.md'), 'utf8'), originalPlan);
+    assert.equal((await run(dir, 'recover-stopped-plan')).code, 1);
+    const before = events(dir).filter((event) => event.phase === 'CLI_STARTED' && event.operation === 'plan').length;
+    const resumed = await run(dir, 'resume'); assert.equal(resumed.code, 1);
+    assert.match(resumed.output, /Planning paths differ from the approved revised plan/);
+    assert.equal(events(dir).filter((event) => event.phase === 'CLI_STARTED' && event.operation === 'plan').length, before + 1);
+    assert.equal(events(dir).filter((event) => event.phase === 'DONE').length, 0);
+  } finally { rmSync(dir, { recursive: true }); }
+});
+for (const reason of ['unapproved-review', 'wrong-digest', 'committed-source', 'dirty-source', 'staged', 'changed-original-plan']) test(`stopped-plan recovery rejects ${reason} without changing checkpoint`, async () => {
+  const dir = await stoppedConsultantFixture(reason);
+  try {
+    const path = join(dir, '.ai-collab/.runtime/checkpoint.json');
+    const before = readFileSync(path, 'utf8');
+    const result = await run(dir, 'recover-stopped-plan'); assert.equal(result.code, 1, result.output);
+    assert.equal(readFileSync(path, 'utf8'), before);
+    assert.ok(!existsSync(join(dir, '.ai-collab/.runtime/storefront-consultant-zalo-2-stopped-original-plan.md')));
+  } finally { rmSync(dir, { recursive: true }); }
+});
+
 async function blockedArchitectureFixture(reason = 'valid') {
   const dir = fixture('architecture-block');
   const failed = await run(dir);

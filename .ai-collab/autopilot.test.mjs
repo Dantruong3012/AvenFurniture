@@ -33,6 +33,20 @@ test('quota retry time and interrupted task retain the same task identity', () =
   assert.deepEqual(assessQueue({ ...safe, checkpoint: { ...checkpoint, quota: { retryAt: new Date(Date.now() - 1000).toISOString() } } }), { status: 'RESUME', task: 'ready' });
   assert.deepEqual(assessQueue({ ...safe, checkpoint: { status: 'STOPPED', task: { id: 'ready' } } }), { status: 'RESUME', task: 'ready' });
 });
+test('dirty stopped or running task resumes only after launcher safety guards', () => {
+  for (const status of ['STOPPED', 'RUNNING']) {
+    const checkpoint = { status, task: { id: 'ready' } };
+    assert.deepEqual(assessQueue({ ...safe, checkpoint, dirty: true }), { status: 'RESUME', task: 'ready' });
+    assert.equal(assessQueue({ ...safe, checkpoint, dirty: true, credentialFileRisk: true }).status, 'BLOCKED');
+    assert.equal(assessQueue({ ...safe, checkpoint, dirty: true, locked: true }).status, 'BLOCKED');
+    assert.equal(assessQueue({ ...safe, checkpoint, dirty: true, blockedArtifacts: ['ready'] }).status, 'BLOCKED');
+    assert.equal(assessQueue({ ...safe, checkpoint, dirty: true, branch: 'main' }).status, 'BLOCKED');
+    assert.equal(assessQueue({ ...safe, checkpoint, dirty: true, remoteMatches: false }).status, 'BLOCKED');
+  }
+  for (const checkpoint of [null, { status: 'IDLE' }, { status: 'DONE' }, { status: 'UNKNOWN', task: { id: 'ready' } }]) {
+    assert.equal(assessQueue({ ...safe, checkpoint, dirty: true }).status, 'BLOCKED');
+  }
+});
 test('agent quota proof prevents repeated smoke until reset or explicit verification', () => {
   const receipt = { kind: 'RESOURCE_EXHAUSTED', retryAt: new Date(Date.now() + 300000).toISOString() };
   assert.equal(assessAgentQuota(receipt).status, 'PAUSED_QUOTA');
