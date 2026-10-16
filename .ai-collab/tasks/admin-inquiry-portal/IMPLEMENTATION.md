@@ -3,7 +3,7 @@
 Status: READY_FOR_REVIEW
 Changed paths: app/admin/(protected)/inquiries/page.tsx, components/admin/catalog-shell.tsx, components/admin/inquiry-portal.tsx, components/ui/icons.tsx, lib/inquiries/actions.ts, lib/repositories/supabaseInquiryRepository.ts, lib/types.ts, lib/validation/inquiry.ts, tests/admin-inquiry.test.mjs, tests/inquiry.test.mjs
 Commit: feat(admin-inquiry-portal): implement approved task
-Commit hash: -
+Commit hash: b8856827b6fbe9a0769ee419470623b2c2a8be30
 
 Implemented the admin inquiry portal. Lint, TypeScript, all 83 tests, and production build pass.
 
