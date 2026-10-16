@@ -1,7 +1,7 @@
 # Workflow state
 
-Active task: -
-Current phase: IDLE
+Active task: email-outbox-dispatch
+Current phase: APPROVED
 Last completed task: admin-inquiry-portal
 Next task: -
 Blockers: -
