@@ -1,9 +1,9 @@
 # Workflow state
 
 Active task: inquiry-service-layer
-Current phase: READY
+Current phase: APPROVED
 Last completed task: -
-Next task: inquiry-service-layer
+Next task: -
 Blockers: -
 Last successful commit: 5e94097
 

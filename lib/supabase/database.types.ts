@@ -535,6 +535,23 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      submit_customer_inquiry: {
+        Args: {
+          p_idempotency_key: string
+          p_contact_name: string
+          p_contact_phone: string
+          p_contact_email: string | null
+          p_message: string | null
+          p_source: string
+          p_original_submission: Json
+          p_items?: Json | null
+        }
+        Returns: {
+          id: string
+          reference: number
+          is_duplicate: boolean
+        }[]
+      }
       save_catalog_product: {
         // Remote generated signature, with nullable create arguments corrected:
         // PostgreSQL accepts NULL for a new product; generator omits argument nullability.

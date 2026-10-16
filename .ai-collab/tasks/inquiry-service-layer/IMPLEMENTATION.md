@@ -1,17 +1,21 @@
 # Implementation: inquiry-service-layer
 
-Status: NOT_STARTED
-Changed paths: -
-Commit: feat(inquiry): add atomic inquiry RPC and repository layer
+Status: READY_FOR_REVIEW
+Changed paths: supabase/migrations/20261016103000_inquiry_transaction.sql, lib/supabase/database.types.ts, lib/validation/inquiry.ts, lib/repositories/supabaseInquiryRepository.ts, tests/inquiry.test.mjs
+Commit: feat(inquiry-service-layer): implement approved task
 Commit hash: -
 
-## Architectural Resolution
+Implemented inquiry-service-layer within the five authorized paths. All required checks passed.
 
-Antigravity (Lead Architect) resolved the architectural blocker on 2026-10-16:
-- Added local PostgreSQL migration specification `supabase/migrations/20261016103000_inquiry_transaction.sql` implementing `submit_customer_inquiry` RPC.
-- The RPC executes atomically, guarantees idempotency deduplication with `ON CONFLICT (idempotency_key) DO NOTHING`, enqueues email outbox in the same transaction, and restricts execution strictly to `service_role`.
-- File ownership updated to include the migration, `lib/supabase/database.types.ts`, `lib/validation/inquiry.ts`, `lib/repositories/supabaseInquiryRepository.ts`, and `tests/inquiry.test.mjs`.
-- Corrected client factory to `createServiceClient()` from `lib/supabase/admin.ts`.
-- Production database migration remains deferred and will NOT be executed during implementation.
+Added the migration exactly as specified in the approved plan, typed RPC arguments/results, customer validation with honeypot protection, and a server-only repository supporting atomic submissions and authenticated admin operations. Validation runs before service-client creation. Admin operations preserve caller RLS, validate inputs, escape search filters, and derive note authorship from auth.uid(). Database errors receive safe messages.
 
-Ready for Codex implementation via Multi-Agent Orchestrator.
+Verification: node --test tests/inquiry.test.mjs passed 16/16; npm run lint passed; npm run typecheck passed; npm test passed 59/59; npm run build passed; git diff --check passed. PGlite loaded all local migrations and verified atomic insertion, item/outbox failure rollback, retry after rollback, duplicate ID/reference preservation, item limits, service-only execution, staff operations, and denial for unprovisioned/revoked sessions. Repository tests exercised the real Supabase query builder with mocked fetch. Concurrent database sessions and live PostgREST were not tested.
+
+Only the five authorized paths were edited. Pre-existing coordinator changes to BACKLOG.md and STATE.md were left untouched. No artifacts, Git HEAD/index, credentials, or test commands were changed. No MCP services, external Production services, remote migrations, push, or deployment were used.
+
+## Independent checks
+
+- npm run lint: PASS
+- npm run typecheck: PASS
+- npm test: PASS
+- npm run build: PASS
