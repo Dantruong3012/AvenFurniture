@@ -3,7 +3,7 @@
 Status: READY_FOR_REVIEW
 Changed paths: lib/email/mailer.ts, lib/email/outbox.ts, lib/email/types.ts, tests/email-outbox.test.mjs
 Commit: feat(email-outbox-dispatch): implement approved task
-Commit hash: -
+Commit hash: d334ac5c23d3d41d0f22848a11d06260c6bd751e
 
 Completed email outbox dispatch with lease locking, bounded retries, safe mailer adapters, and integration coverage.
 
