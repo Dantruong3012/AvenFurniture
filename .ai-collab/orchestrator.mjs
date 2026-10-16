@@ -27,6 +27,8 @@ const architectureReviewPath = '.ai-collab/tasks/orchestrator-architecture-recov
 const architectureRunnerPaths = new Set(['.ai-collab/orchestrator.mjs', '.ai-collab/orchestrator.integration.test.mjs', '.ai-collab/README.md', '.ai-collab/tasks/orchestrator-architecture-recovery/PLAN.md', '.ai-collab/tasks/orchestrator-architecture-recovery/IMPLEMENTATION.md', architectureReviewPath]);
 const architecturePlanReviewPath = '.ai-collab/tasks/orchestrator-architecture-plan-recovery/REVIEW.md';
 const architecturePlanRunnerPaths = new Set(['.ai-collab/orchestrator.mjs', '.ai-collab/orchestrator.integration.test.mjs', '.ai-collab/README.md', '.ai-collab/tasks/orchestrator-architecture-plan-recovery/PLAN.md', '.ai-collab/tasks/orchestrator-architecture-plan-recovery/IMPLEMENTATION.md', architecturePlanReviewPath]);
+const gitPermissionReviewPath = '.ai-collab/tasks/orchestrator-git-permission-recovery/REVIEW.md';
+const gitPermissionRunnerPaths = new Set(['.ai-collab/orchestrator.mjs', '.ai-collab/orchestrator.integration.test.mjs', '.ai-collab/README.md', '.ai-collab/tasks/orchestrator-git-permission-recovery/PLAN.md', '.ai-collab/tasks/orchestrator-git-permission-recovery/IMPLEMENTATION.md', gitPermissionReviewPath]);
 const architectureBlocker = 'codex: The approved plan requires statuses incompatible with the existing database constraint; resolution exceeds the authorized paths.';
 const inquiryStatuses = ['new', 'consulting', 'completed', 'cancelled'];
 const architecturePlanningError = 'Antigravity Planning changed approved inquiry-status semantics';
@@ -389,6 +391,57 @@ function recoverArchitecturePlan() {
     event('ARCHITECTURE_PLAN_RECOVERED', { receipt: receipt.sequence, paths });
   } finally { rmSync(lock, { recursive: true }); }
 }
+function recoverGitPermission() {
+  acquireLock(lock, true);
+  try {
+    if (!existsSync(checkpointPath)) throw new Error('No checkpoint to recover');
+    checkpoint = JSON.parse(read(checkpointPath));
+    const id = checkpoint.task?.id;
+    const data = backlog();
+    const task = data.tasks.find((item) => item.id === id);
+    if (!id || checkpoint.status !== 'BLOCKED' || checkpoint.phase !== 'IN_PROGRESS' || checkpoint.error !== 'git write-tree failed (128)' || !task || task.status !== 'BLOCKED' || !checkpoint.planReceipt || !checkpoint.paths?.length || checkpoint.round !== 1) throw new Error('Only the saved Git index permission blocker can be recovered');
+    if (checkpoint.configDigest !== configDigest || checkpoint.scriptsDigest !== digest(requiredScripts())) throw new Error('Runner configuration or required checks changed');
+    const state = read(join(workspace, 'STATE.md'));
+    if (field(state, 'Active task') !== id || field(state, 'Current phase') !== 'BLOCKED' || field(data.content, 'Roadmap approval') !== 'APPROVED') throw new Error('Workflow state does not match the blocked task');
+    const planPath = `.ai-collab/tasks/${id}/PLAN.md`;
+    const implementationPath = `.ai-collab/tasks/${id}/IMPLEMENTATION.md`;
+    const plan = read(taskPath(id, 'PLAN.md'));
+    const blocked = `# Implementation: ${id}\n\nStatus: BLOCKED\n\ngit write-tree failed (128)\n\nSee local checkpoint and logs; preserve all working changes.\n`;
+    if (field(plan, 'Status') !== 'APPROVED' || !plan.startsWith(`# Plan: ${id}\n`) || read(taskPath(id, 'IMPLEMENTATION.md')) !== blocked) throw new Error('Approved plan or exact blocker artifact missing');
+    const receiptPath = join(runtime, `${id}-${checkpoint.planReceipt.sequence}-plan.receipt.json`);
+    if (!existsSync(receiptPath) || digest(JSON.parse(read(receiptPath))) !== digest(checkpoint.planReceipt) || checkpoint.planReceipt.agent !== 'antigravity' || checkpoint.planReceipt.operation !== 'plan' || checkpoint.planReceipt.exitCode !== 0 || checkpoint.planReceipt.status !== 'READY' || checkpoint.planReceipt.result?.status !== 'READY' || JSON.stringify(validatePaths(checkpoint.planReceipt.result.paths)) !== JSON.stringify(checkpoint.paths)) throw new Error('Saved Antigravity Planning receipt differs from approved source paths');
+    if (git('diff', '--cached', '--name-only')) throw new Error('Unexpected staged changes');
+    const head = git('rev-parse', 'HEAD');
+    if (git('rev-parse', `${head}^`) !== checkpoint.baseHead) throw new Error('Recovery requires one reviewed runner commit after the blocked checkpoint');
+    const committed = git('diff', '--name-only', checkpoint.baseHead, head).split('\n').filter(Boolean);
+    if (!committed.includes('.ai-collab/orchestrator.mjs') || !committed.includes(gitPermissionReviewPath) || committed.some((path) => !gitPermissionRunnerPaths.has(path))) throw new Error('Recovery commit contains unreviewed or missing runner paths');
+    const review = git('show', `${head}:${gitPermissionReviewPath}`);
+    if (field(review, 'Status') !== 'APPROVED' || !/^Reviewer: Antigravity\b/m.test(review) || field(review, 'Reviewed blocked HEAD') !== checkpoint.baseHead || field(review, 'Reviewed task') !== id) throw new Error('Matching Antigravity runner review is missing');
+    const allowed = new Set([...committed, ...checkpoint.paths, '.ai-collab/BACKLOG.md', '.ai-collab/STATE.md', planPath, implementationPath]);
+    if (changes(checkpoint.baseline, snapshot(root)).some((path) => !allowed.has(path))) throw new Error('Source outside the task or runner upgrade changed');
+    if (changedWorkingPaths().some((path) => !new Set([...checkpoint.paths, '.ai-collab/BACKLOG.md', '.ai-collab/STATE.md', planPath, implementationPath]).has(path))) throw new Error('Uncommitted changes outside the blocked task');
+    // This must succeed before any checkpoint mutation. It also proves the
+    // original index permission failure is no longer present.
+    git('write-tree');
+    const archive = join(runtime, `${id}-${checkpoint.sequence}-git-permission-blocker.md`);
+    if (existsSync(archive)) throw new Error('Blocker archive already exists');
+    const prior = { status: checkpoint.status, phase: checkpoint.phase, round: checkpoint.round, error: checkpoint.error, baseHead: checkpoint.baseHead, sequence: checkpoint.sequence, blockerDigest: digest(blocked) };
+    writeFileSync(archive, blocked, { mode: 0o600 });
+    checkpoint.gitPermissionRecoveryHistory = [...(checkpoint.gitPermissionRecoveryHistory ?? []), prior];
+    checkpoint.baseHead = head;
+    const current = snapshot(root);
+    const originalBaseline = checkpoint.baseline;
+    checkpoint.baseline = { ...current };
+    for (const path of checkpoint.paths) {
+      if (Object.hasOwn(originalBaseline, path)) checkpoint.baseline[path] = originalBaseline[path];
+      else delete checkpoint.baseline[path];
+    }
+    checkpoint.error = null;
+    artifact('IMPLEMENTATION.md', `# Implementation: ${id}\n\nStatus: IN_PROGRESS\n\nResuming the approved implementation after a verified Git index permission recovery. The original blocker and Planning receipt are preserved in the private checkpoint history.\n`);
+    transition('IN_PROGRESS');
+    event('GIT_PERMISSION_RECOVERED', { reviewedCommit: head, blockedSequence: prior.sequence });
+  } finally { releaseLock(lock); }
+}
 const boundary = 'Read AGENTS.md. Work only on this task. Never push, deploy, access external Production services, run a Production migration, change credentials/secrets, or modify another task. Do not use MCP services or bypass permission checks. Never change Git HEAD/index unless this prompt explicitly requests the commit phase. Do not modify orchestrator code/config or test commands. Do not write status artifacts; the coordinator persists your structured response.';
 function reviewContext() {
   const tracked = new Set(git('ls-tree', '-r', '--name-only', checkpoint.baseHead).split('\n'));
@@ -681,6 +734,7 @@ try {
   else if (action === 'replan') replan();
   else if (action === 'recover-architecture') recoverArchitecture();
   else if (action === 'recover-architecture-plan') recoverArchitecturePlan();
+  else if (action === 'recover-git-permission') recoverGitPermission();
   else if (['release-status', 'release-push', 'doctor'].includes(action)) {
     const { releaseCommand } = await import('./release.mjs');
     await releaseCommand(root, action);
@@ -691,5 +745,5 @@ try {
     console.log(JSON.stringify({ checkpoint: state ? { task: state.task?.id ?? null, status: state.status, phase: state.phase, round: state.round, error: state.error, quota: state.quota ?? null, lastTokenUsage: state.lastTokenUsage ?? null } : null, handoff: existsSync(join(runtime, 'HANDOFF.md')) ? '.ai-collab/.runtime/HANDOFF.md' : null, next: select()?.id ?? null, paused: tasks.filter((task) => task.status === 'PAUSED_QUOTA').map((task) => task.id), blocked: tasks.filter((task) => task.status !== 'PAUSED_QUOTA' && hasBlocker(task)).map((task) => task.id), lock: existsSync(join(lock, 'owner.json')) ? JSON.parse(read(join(lock, 'owner.json'))) : null, receipts: existsSync(runtime) ? readdirSync(runtime).filter((name) => name.endsWith('.receipt.json')).length : 0 }, null, 2));
   }
   else if (action === 'stop') { mkdirSync(runtime, { recursive: true }); writeFileSync(stopFile, 'stop\n'); console.log('Stop requested; active child will be terminated and checkpoint preserved.'); }
-  else throw new Error('Usage: node .ai-collab/orchestrator.mjs run|resume [--quota-ready]|recover-quota|recover-plan-path|replan|recover-architecture|recover-architecture-plan|status|stop|doctor|release-status|release-push');
+  else throw new Error('Usage: node .ai-collab/orchestrator.mjs run|resume [--quota-ready]|recover-quota|recover-plan-path|replan|recover-architecture|recover-architecture-plan|recover-git-permission|status|stop|doctor|release-status|release-push');
 } catch (error) { console.error(`Orchestrator stopped: ${error.message}`); process.exitCode = 1; }

@@ -144,6 +144,49 @@ for(const mode of ['reject-review','fail-check','false-commit','mutate-review'])
 test('stop and resume preserves partial work and finishes without duplicate commit',async()=>{
  const dir=fixture('stop-resume');try{const active=run(dir);await waitFor(dir,'implement');await run(dir,'stop');assert.equal((await active).code,1);assert.equal(checkpoint(dir).status,'STOPPED');const result=await run(dir,'resume');assert.equal(result.code,0,result.output);assert.equal(events(dir).filter(e=>e.phase==='DONE').length,1);}finally{rmSync(dir,{recursive:true});}
 });
+async function blockedGitPermissionFixture() {
+ const dir=fixture('stop-resume');
+ const active=run(dir);await waitFor(dir,'implement');await run(dir,'stop');assert.equal((await active).code,1);
+ const path=join(dir,'.ai-collab/.runtime/checkpoint.json');
+ const saved=checkpoint(dir);assert.equal(saved.status,'STOPPED');
+ saved.status='BLOCKED';saved.error='git write-tree failed (128)';
+ writeFileSync(path,JSON.stringify(saved));
+ writeFileSync(join(dir,'.ai-collab/tasks/t1/IMPLEMENTATION.md'),'# Implementation: t1\n\nStatus: BLOCKED\n\ngit write-tree failed (128)\n\nSee local checkpoint and logs; preserve all working changes.\n');
+ for(const [name,find,replacement] of [['BACKLOG.md','| IN_PROGRESS |','| BLOCKED |'],['STATE.md','Current phase: IN_PROGRESS','Current phase: BLOCKED']]) {
+  const file=join(dir,'.ai-collab',name);const content=readFileSync(file,'utf8');assert.ok(content.includes(find));writeFileSync(file,content.replace(find,replacement));
+ }
+ writeFileSync(join(dir,'t1.txt'),'partial');
+ return dir;
+}
+function commitGitPermissionUpgrade(dir, status='APPROVED') {
+ const c=checkpoint(dir),review=join(dir,'.ai-collab/tasks/orchestrator-git-permission-recovery/REVIEW.md');
+ mkdirSync(dirname(review),{recursive:true});
+ writeFileSync(review,`# Review: orchestrator-git-permission-recovery\n\nStatus: ${status}\nReviewer: Antigravity\nReviewed blocked HEAD: ${c.baseHead}\nReviewed task: t1\n\nReviewed exact runner recovery.\n`);
+ const runner=join(dir,'.ai-collab/orchestrator.mjs');writeFileSync(runner,readFileSync(runner,'utf8')+'\n// reviewed permission recovery fixture\n');
+ gitCall(dir,'add','--','.ai-collab/orchestrator.mjs','.ai-collab/tasks/orchestrator-git-permission-recovery/REVIEW.md');
+ gitCall(dir,'commit','-qm','fix(orchestrator): recover Git index permission blocker');
+}
+test('reviewed Git permission recovery preserves partial source and resumes the same task',async()=>{
+ const dir=await blockedGitPermissionFixture();try{
+  const before=checkpoint(dir);commitGitPermissionUpgrade(dir);
+  const recovered=await run(dir,'recover-git-permission');assert.equal(recovered.code,0,recovered.output);
+  const c=checkpoint(dir);assert.equal(c.phase,'IN_PROGRESS');assert.equal(c.status,'RUNNING');assert.equal(c.round,before.round);assert.equal(c.planReceipt.sequence,before.planReceipt.sequence);assert.equal(c.gitPermissionRecoveryHistory[0].error,'git write-tree failed (128)');
+  assert.equal(readFileSync(join(dir,'t1.txt'),'utf8'),'partial');
+  const resumed=await run(dir,'resume');assert.equal(resumed.code,0,resumed.output);
+  assert.equal(events(dir).filter(e=>e.phase==='DONE').length,1);
+ }finally{rmSync(dir,{recursive:true});}
+});
+for(const [name,status,extra] of [['missing approval','CHANGES_REQUESTED',false],['unowned committed source','APPROVED',true],['staged task source','APPROVED',false]])test('Git permission recovery rejects '+name+' without changing checkpoint',async()=>{
+ const dir=await blockedGitPermissionFixture();try{
+  if(extra){writeFileSync(join(dir,'unrelated.txt'),'bad');gitCall(dir,'add','unrelated.txt');gitCall(dir,'commit','-qm','unreviewed source');}
+  else commitGitPermissionUpgrade(dir,status);
+  if(name==='staged task source')gitCall(dir,'add','t1.txt');
+  const before=readFileSync(join(dir,'.ai-collab/.runtime/checkpoint.json'),'utf8');
+  const result=await run(dir,'recover-git-permission');assert.equal(result.code,1,result.output);
+  assert.equal(readFileSync(join(dir,'.ai-collab/.runtime/checkpoint.json'),'utf8'),before);
+  assert.equal(readFileSync(join(dir,'t1.txt'),'utf8'),'partial');
+ }finally{rmSync(dir,{recursive:true});}
+});
 test('modification after approved review blocks a resumed commit',async()=>{
  const dir=fixture('stale-review');try{const active=run(dir);await waitFor(dir,'commit');await run(dir,'stop');assert.equal((await active).code,1);writeFileSync(join(dir,'t1.txt'),'changed after approval');const result=await run(dir,'resume');assert.equal(result.code,1);assert.equal(checkpoint(dir).status,'BLOCKED');assert.equal(spawnSync('git',['rev-list','--count','HEAD'],{cwd:dir,encoding:'utf8'}).stdout.trim(),'1');}finally{rmSync(dir,{recursive:true});}
 });
