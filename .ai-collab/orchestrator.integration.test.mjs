@@ -23,9 +23,18 @@ if(agy&&phase==='plan'&&prompt.includes('Repository tracked files'))process.exit
 if(agy&&phase==='review'&&(!prompt.includes('NEW FILES')||!prompt.includes('verified')||prompt.includes('CURRENT FILES')))process.exit(7);
 const result={status:'READY',summary:'Fixture evidence',paths:[id+'.txt'],details:'Implement the exact proof file.'};
 if(agy&&phase==='plan'&&mode==='unsafe-plan-artifact')result.paths.push('.ai-collab/tasks/'+id+'/IMPLEMENTATION.md');
+if(agy&&phase==='plan'&&mode==='replan-block'&&prompt.includes('Revised fixture ownership')){
+  if(!prompt.includes('app/cart/page.tsx')||!prompt.includes('Existing tracked application and test paths'))process.exit(7);
+  result.paths=existsSync('.ai-collab/.runtime/wrong-replan-paths')?['src/cart/page.tsx']:['t1.txt','app/cart/page.tsx','components/forms/contact-form.tsx'];
+}
 if(phase==='implement') {
+  if(mode==='replan-block'&&!existsSync('.ai-collab/.runtime/replan-once')){
+    writeFileSync('.ai-collab/.runtime/replan-once','yes');
+    result.status='BLOCKED';result.summary='The exact path allowlist excludes the existing cart and product integration points. No files changed.';
+  } else {
   if(mode==='stop-resume'&&!existsSync('.ai-collab/.runtime/delayed')){writeFileSync('.ai-collab/.runtime/delayed','yes');await new Promise(r=>setTimeout(r,2500));}
   writeFileSync(id+'.txt','verified'); result.status='READY_FOR_REVIEW';
+  }
 }
 if(agy && (((mode==='quota-plan'&&phase==='plan')||(mode==='quota-review'&&phase==='review')) && !existsSync('.ai-collab/.runtime/quota-seen') || (mode==='quota-always'&&phase==='plan'))) {
   writeFileSync('.ai-collab/.runtime/quota-seen','yes');
@@ -65,6 +74,22 @@ function reviewedPlanRecovery(dir,status='APPROVED'){
  writeFileSync(review,`# Review: orchestrator-plan-path-recovery\n\nStatus: ${status}\nReviewer: Antigravity\n\nReviewed Planning contract and recovery.\n`);
  const runner=join(dir,'.ai-collab/orchestrator.mjs');writeFileSync(runner,readFileSync(runner,'utf8')+'\n// reviewed fixture change\n');
  return review;
+}
+function reviewedReplan(dir,status='APPROVED'){
+ const review=join(dir,'.ai-collab/tasks/orchestrator-replan-recovery/REVIEW.md');mkdirSync(dirname(review),{recursive:true});
+ writeFileSync(review,`# Review: orchestrator-replan-recovery\n\nStatus: ${status}\nReviewer: Antigravity\n\nReviewed replan runner.\n`);
+ const runner=join(dir,'.ai-collab/orchestrator.mjs');writeFileSync(runner,readFileSync(runner,'utf8')+'\n// reviewed replan fixture change\n');
+}
+async function blockedReplanFixture(){
+ const dir=fixture('replan-block');
+ const cart=join(dir,'app/cart/page.tsx');mkdirSync(dirname(cart),{recursive:true});writeFileSync(cart,'export const cart = true;\n');
+ gitCall(dir,'add','app/cart/page.tsx');gitCall(dir,'commit','-qm','Add existing cart integration');
+ const failed=await run(dir);assert.equal(failed.code,1,failed.output);assert.equal(checkpoint(dir).status,'BLOCKED');
+ return dir;
+}
+function revisedFixturePlan(dir,status='APPROVED'){
+ const path=join(dir,'.ai-collab/tasks/t1/PLAN.md');
+ writeFileSync(path,`# Plan: t1\n\nStatus: ${status}\n\nRevised fixture ownership. Existing integration: app/cart/page.tsx. New module: components/forms/contact-form.tsx.\n\nOwned paths: t1.txt, app/cart/page.tsx, components/forms/contact-form.tsx\n`);
 }
 function checkpoint(dir) {return JSON.parse(readFileSync(join(dir,'.ai-collab/.runtime/checkpoint.json')));}
 function events(dir) {return readFileSync(join(dir,'.ai-collab/.runtime/events.jsonl'),'utf8').trim().split('\n').map(JSON.parse);}
@@ -252,6 +277,61 @@ for(const extra of ['backlog-state','application-commit','application-dirty'])te
   const result=await run(dir,'resume','--quota-ready');assert.equal(result.code,1,result.output);
   assert.equal(readFileSync(path,'utf8'),saved);
   assert.equal(events(dir).filter(e=>e.phase==='CLI_STARTED').length,before);
+  assert.equal(events(dir).filter(e=>e.phase==='DONE').length,0);
+ }finally{rmSync(dir,{recursive:true});}
+});
+test('reviewed replan preserves old evidence and resume invokes fresh Antigravity Planning',async()=>{
+ const dir=await blockedReplanFixture();try {
+  const old=checkpoint(dir),oldReceipt=readFileSync(join(dir,'.ai-collab/.runtime/t1-1-plan.receipt.json'),'utf8');
+  const oldImplementation=readFileSync(join(dir,'.ai-collab/tasks/t1/IMPLEMENTATION.md'),'utf8');
+  revisedFixturePlan(dir);reviewedReplan(dir);
+  gitCall(dir,'add','.ai-collab/orchestrator.mjs','.ai-collab/tasks/orchestrator-replan-recovery/REVIEW.md');gitCall(dir,'commit','-qm','fix(orchestrator): reviewed replan runner');
+  const recovered=await run(dir,'replan');assert.equal(recovered.code,0,recovered.output);
+  const ready=checkpoint(dir);assert.equal(ready.phase,'PLANNING');assert.equal(ready.status,'RUNNING');assert.deepEqual(ready.paths,[]);
+  assert.equal(ready.replanHistory[0].error,old.error);assert.deepEqual(ready.replanHistory[0].planReceipt,old.planReceipt);
+  assert.equal(readFileSync(join(dir,'.ai-collab/.runtime/t1-1-plan.receipt.json'),'utf8'),oldReceipt);
+  assert.equal(readFileSync(join(dir,'.ai-collab/.runtime/t1-2-replan-blocker.md'),'utf8'),oldImplementation);
+  assert.equal((await run(dir,'replan')).code,1);
+  const resumed=await run(dir,'resume');assert.equal(resumed.code,0,resumed.output);
+  const replanned=events(dir).filter(e=>e.phase==='CLI_STARTED'&&e.agent==='antigravity'&&e.operation==='plan');
+  assert.equal(replanned.length,2);
+  assert.deepEqual(replanned.map(e=>e.sequence),[1,3]);
+  const receipt=JSON.parse(readFileSync(join(dir,'.ai-collab/.runtime/t1-3-plan.receipt.json'),'utf8'));
+  assert.deepEqual(receipt.result.paths,['t1.txt','app/cart/page.tsx','components/forms/contact-form.tsx']);
+  assert.deepEqual(events(dir).filter(e=>e.phase==='DONE').map(e=>e.task),['t1']);
+ }finally{rmSync(dir,{recursive:true});}
+});
+for(const reason of ['unapproved-plan','unchanged-plan','unapproved-review','uncommitted-review','dirty-source','committed-source','staged'])test('replan refuses '+reason+' and preserves checkpoint',async()=>{
+ const dir=await blockedReplanFixture();try {
+  revisedFixturePlan(dir,reason==='unapproved-plan'?'DRAFT':'APPROVED');reviewedReplan(dir,reason==='unapproved-review'?'CHANGES_REQUESTED':'APPROVED');
+  if(reason==='unchanged-plan')writeFileSync(join(dir,'.ai-collab/tasks/t1/PLAN.md'),readFileSync(join(dir,'.ai-collab/tasks/t1/PLAN.md'),'utf8').replace('Owned paths: t1.txt, app/cart/page.tsx, components/forms/contact-form.tsx','Owned paths: t1.txt'));
+  if(reason==='committed-source')writeFileSync(join(dir,'app/cart/page.tsx'),'changed source\n');
+  if(reason!=='uncommitted-review'){
+    gitCall(dir,'add','.ai-collab/orchestrator.mjs','.ai-collab/tasks/orchestrator-replan-recovery/REVIEW.md');
+    if(reason==='committed-source')gitCall(dir,'add','app/cart/page.tsx');
+    gitCall(dir,'commit','-qm','fix(orchestrator): candidate replan');
+  }
+  if(reason==='dirty-source')writeFileSync(join(dir,'app/cart/page.tsx'),'dirty source\n');
+  if(reason==='staged'){writeFileSync(join(dir,'app/cart/page.tsx'),'staged source\n');gitCall(dir,'add','app/cart/page.tsx');}
+  const before=readFileSync(join(dir,'.ai-collab/.runtime/checkpoint.json'),'utf8');
+  const originalImpl=readFileSync(join(dir,'.ai-collab/tasks/t1/IMPLEMENTATION.md'),'utf8');
+  const result=await run(dir,'replan');assert.equal(result.code,1,result.output);
+  assert.equal(readFileSync(join(dir,'.ai-collab/.runtime/checkpoint.json'),'utf8'),before);
+  assert.equal(readFileSync(join(dir,'.ai-collab/tasks/t1/IMPLEMENTATION.md'),'utf8'),originalImpl);
+  assert.ok(!existsSync(join(dir,'.ai-collab/.runtime/t1-2-replan-blocker.md')));
+ }finally{rmSync(dir,{recursive:true});}
+});
+test('replan refuses a task that is not BLOCKED',async()=>{
+ const dir=fixture();try{const before=gitCall(dir,'rev-parse','HEAD');const result=await run(dir,'replan');assert.equal(result.code,1);assert.equal(gitCall(dir,'rev-parse','HEAD'),before);assert.ok(!existsSync(join(dir,'.ai-collab/.runtime/checkpoint.json')));}finally{rmSync(dir,{recursive:true});}
+});
+test('fresh Planning cannot expand or replace approved replan ownership',async()=>{
+ const dir=await blockedReplanFixture();try{
+  revisedFixturePlan(dir);reviewedReplan(dir);
+  gitCall(dir,'add','.ai-collab/orchestrator.mjs','.ai-collab/tasks/orchestrator-replan-recovery/REVIEW.md');gitCall(dir,'commit','-qm','fix(orchestrator): reviewed replan runner');
+  assert.equal((await run(dir,'replan')).code,0);
+  writeFileSync(join(dir,'.ai-collab/.runtime/wrong-replan-paths'),'yes');
+  const result=await run(dir,'resume');assert.equal(result.code,1,result.output);assert.match(result.output,/differ from the approved revised plan/);
+  assert.equal(checkpoint(dir).status,'BLOCKED');assert.deepEqual(checkpoint(dir).paths,[]);
   assert.equal(events(dir).filter(e=>e.phase==='DONE').length,0);
  }finally{rmSync(dir,{recursive:true});}
 });
