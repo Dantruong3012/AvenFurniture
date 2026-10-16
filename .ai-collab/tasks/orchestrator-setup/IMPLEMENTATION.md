@@ -1,9 +1,9 @@
 # Implementation: orchestrator-setup
 
 Status: READY_FOR_REVIEW
-Lifecycle: APPROVED; all required verification passed; local setup commit pending.
+Lifecycle: DONE; Antigravity APPROVED, required checks passed, and local setup commit verified.
 Commit: feat(agents): add verified multi-agent orchestrator
-Commit hash: -
+Commit hash: 5cc14bc4d676f5ebf1f25bf347871b0ecf33da00
 
 ## Implemented
 
@@ -32,3 +32,7 @@ The CLI installation/authentication works. The product queue currently has no el
 ## Operator commands
 
 See `.ai-collab/README.md` for `run`, `status`, `stop`, `resume`, event log monitoring, and the isolated real-CLI proof command. Local raw logs and JSON receipts are ignored; commit only curated Markdown evidence.
+
+## Completion record
+
+The setup commit contains exactly the 13 approved setup paths. This follow-up metadata commit records its hash and DONE lifecycle without modifying the preexisting product BACKLOG.md or STATE.md. No application files were included; no push or deploy was performed.
