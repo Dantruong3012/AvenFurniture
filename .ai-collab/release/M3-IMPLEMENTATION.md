@@ -1,8 +1,9 @@
 # M3 browser E2E implementation
 
-Status: READY_FOR_REVIEW
+Status: DONE
 Implementer: Codex
 Date: 2026-10-16
+Implementation commit: `b66a861`
 
 ## Delivered
 
@@ -24,4 +25,4 @@ Date: 2026-10-16
 
 The new Git Preview is READY but protected by Vercel SSO. No authenticated live Preview E2E was run, so this evidence proves the local fixture suite only. The current shared Supabase database was not changed or used as a source for the fixtures. No Production deploy, migration, Auth/RLS change, or secret change occurred. The repo-root admin checkpoint and dirty metadata remain untouched.
 
-Antigravity review and local commit are pending.
+Antigravity review is APPROVED in M3-REVIEW.md. The implementation commit is local only; no push or deployment followed.
