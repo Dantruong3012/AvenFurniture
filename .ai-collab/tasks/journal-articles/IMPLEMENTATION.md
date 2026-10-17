@@ -3,7 +3,7 @@
 Status: READY_FOR_REVIEW
 Changed paths: app/journal/page.tsx, app/journal/[slug]/page.tsx, app/sitemap.ts, components/journal/article-card.tsx, components/journal/article-detail.tsx, components/journal/markdown-renderer.tsx, lib/journal/articles.ts, lib/journal/types.ts, tests/journal-policy.test.mjs
 Commit: feat(journal-articles): implement approved task
-Commit hash: -
+Commit hash: 8623f7e3f626d1df587ac99ce87180f30797b2c5
 
 Implemented the journal listing, two static article pages, safe Markdown rendering, SEO metadata, sitemap entries, and a CTA to the Zalo consultant directory.
 
