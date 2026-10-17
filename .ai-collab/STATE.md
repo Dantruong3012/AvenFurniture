@@ -1,7 +1,7 @@
 # Workflow state
 
-Active task: -
-Current phase: IDLE
+Active task: journal-articles
+Current phase: APPROVED
 Last completed task: journal-content-policy
 Next task: journal-articles
 Blockers: -
