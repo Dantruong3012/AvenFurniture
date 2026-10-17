@@ -4,9 +4,10 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useActionState, useEffect, useRef, useState } from "react";
 import { CloseIcon, SearchIcon } from "@/components/ui/icons";
-import { changeInquiryStatus, createInquiryNote } from "@/lib/inquiries/actions";
+import { changeInquiryAssignment, changeInquiryStatus, createInquiryNote, getActiveInquiryStaff } from "@/lib/inquiries/actions";
 import { inquiryStatuses } from "@/lib/validation/inquiry";
-import type { AdminInquiryActionState, AdminInquiryDetail, AdminInquirySummary, InquiryPortalQuery } from "@/lib/types";
+import type { ActiveInquiryStaff, AdminInquiryAssignmentDetail } from "@/lib/repositories/supabaseInquiryRepository";
+import type { AdminInquiryActionState, AdminInquirySummary, InquiryPortalQuery } from "@/lib/types";
 
 const labels = { all: "All", new: "New", consulting: "Consulting", completed: "Completed", cancelled: "Cancelled" };
 type InquiryMetrics = { total: number; byStatus: Record<(typeof inquiryStatuses)[number], { count: number; percentage: number }>; last7Days: number; last30Days: number };
@@ -29,17 +30,21 @@ function Feedback({ state }: { state: AdminInquiryActionState }) {
   return <>{state.error && <p role="alert" className="auth-error">{state.error}</p>}{state.success && <p role="status" className="admin-toast">{state.success}</p>}</>;
 }
 
-function InquiryDrawer({ id, detail, closeHref, currentUserId }: { id: string; detail: AdminInquiryDetail | null; closeHref: string; currentUserId: string }) {
+function InquiryDrawer({ id, detail, closeHref, currentUserId }: { id: string; detail: AdminInquiryAssignmentDetail | null; closeHref: string; currentUserId: string }) {
   const router = useRouter();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [body, setBody] = useState("");
+  const [staff, setStaff] = useState<ActiveInquiryStaff[]>([]);
+  const [staffLoading, setStaffLoading] = useState(Boolean(detail));
+  const [staffError, setStaffError] = useState("");
   const [statusState, statusAction, statusPending] = useActionState(changeInquiryStatus, {});
+  const [assignmentState, assignmentAction, assignmentPending] = useActionState(changeInquiryAssignment, {});
   const [noteState, noteAction, notePending] = useActionState(async (previous: AdminInquiryActionState, form: FormData) => {
     const result = await createInquiryNote(previous, form);
     if (result.success) setBody("");
     return result;
   }, {});
-  const pending = statusPending || notePending;
+  const pending = statusPending || assignmentPending || notePending;
   const close = () => { if (!pending) router.replace(closeHref, { scroll: false }); };
 
   useEffect(() => {
@@ -56,6 +61,19 @@ function InquiryDrawer({ id, detail, closeHref, currentUserId }: { id: string; d
       target?.focus({ preventScroll: true });
     };
   }, [id]);
+
+  useEffect(() => {
+    if (!detail) return;
+    let mounted = true;
+    getActiveInquiryStaff().then((members) => {
+      if (mounted) setStaff(members);
+    }).catch(() => {
+      if (mounted) setStaffError("Active staff could not be loaded. Refresh and try again.");
+    }).finally(() => {
+      if (mounted) setStaffLoading(false);
+    });
+    return () => { mounted = false; };
+  }, [id, detail]);
 
   return <dialog ref={dialogRef} className="inquiry-dialog inquiry-drawer" aria-labelledby="inquiry-detail-title" onCancel={(event) => { event.preventDefault(); close(); }}>
     <header className="inquiry-dialog-heading">
@@ -77,6 +95,22 @@ function InquiryDrawer({ id, detail, closeHref, currentUserId }: { id: string; d
           <input type="hidden" name="id" value={id} />
           <label htmlFor="inquiry-status">Status</label><select id="inquiry-status" name="status" key={detail.status} defaultValue={detail.status} disabled={pending}>{inquiryStatuses.map((status) => <option key={status} value={status}>{labels[status]}</option>)}</select>
           <button className="btn" disabled={pending}>{statusPending ? "Saving…" : "Save status"}</button><Feedback state={statusState} />
+        </form>
+      </section>
+      <section aria-labelledby="assignment-heading"><h3 id="assignment-heading">Staff assignment</h3>
+        <form action={assignmentAction} className="contact-form">
+          <input type="hidden" name="id" value={id} />
+          <label htmlFor="inquiry-assignee">Assigned staff member</label>
+          <select id="inquiry-assignee" name="assignedTo" key={`${detail.assignee_id ?? ""}:${staffLoading}`} defaultValue={detail.assignee_id ?? ""} disabled={pending || staffLoading || Boolean(staffError)}>
+            <option value="">Unassigned</option>
+            {staff.map((member) => <option key={member.user_id} value={member.user_id}>{member.display_name}</option>)}
+            {detail.assignee_id && !staff.some((member) => member.user_id === detail.assignee_id) &&
+              <option value={detail.assignee_id} disabled>Current assignee is inactive or unavailable</option>}
+          </select>
+          {staffLoading && <p className="field-hint">Loading active staff…</p>}
+          {staffError && <p role="alert" className="auth-error">{staffError}</p>}
+          {!staffLoading && !staffError && !staff.length && <p className="field-hint">No active staff members are available.</p>}
+          <button className="btn" disabled={pending || staffLoading || Boolean(staffError)}>{assignmentPending ? "Saving…" : "Save assignment"}</button><Feedback state={assignmentState} />
         </form>
       </section>
       <section aria-labelledby="notes-heading"><h3 id="notes-heading">Internal staff notes</h3><p>Visible only to staff.</p>
@@ -111,7 +145,7 @@ function InquiryDrawer({ id, detail, closeHref, currentUserId }: { id: string; d
 }
 
 export function InquiryPortal({ inquiries, count, pageSize, filters, detail, currentUserId, metrics = emptyMetrics }: {
-  inquiries: AdminInquirySummary[]; count: number; pageSize: number; filters: InquiryPortalQuery; detail: AdminInquiryDetail | null; currentUserId: string; metrics?: InquiryMetrics;
+  inquiries: AdminInquirySummary[]; count: number; pageSize: number; filters: InquiryPortalQuery; detail: AdminInquiryAssignmentDetail | null; currentUserId: string; metrics?: InquiryMetrics;
 }) {
   const pages = Math.max(1, Math.min(10000, Math.ceil(count / pageSize)));
   return <>

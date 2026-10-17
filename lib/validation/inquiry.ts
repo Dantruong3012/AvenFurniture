@@ -32,6 +32,16 @@ export function validateInquiryNote(body: unknown): string {
   return body.trim();
 }
 
+export function validateInquiryAssignment(input: unknown): { inquiryId: string; assignedTo: string | null } {
+  if (!isRecord(input) || typeof input.inquiryId !== "string" || !uuidPattern.test(input.inquiryId)) {
+    throw new Error("Choose a valid inquiry.");
+  }
+  if (input.assignedTo !== null && (typeof input.assignedTo !== "string" || !uuidPattern.test(input.assignedTo))) {
+    throw new Error("Choose a valid staff member or unassign the inquiry.");
+  }
+  return { inquiryId: input.inquiryId, assignedTo: input.assignedTo };
+}
+
 export function parseInquiryPortalQuery(params: Record<string, string | string[] | undefined>): InquiryPortalQuery {
   const { page = "1", status = "all", q = "", inquiry } = params;
   if (typeof page !== "string" || !/^[1-9]\d{0,4}$/.test(page) || Number(page) > 10000) throw new Error("Choose a page from 1 to 10000.");

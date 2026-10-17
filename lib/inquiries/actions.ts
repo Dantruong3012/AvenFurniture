@@ -3,10 +3,15 @@
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth/admin";
 import { allowAuthMutation } from "@/lib/auth/mutation";
-import { addAdminInquiryNote, lookupCustomerInquiries as queryCustomerInquiries, updateAdminInquiryStatus } from "@/lib/repositories/supabaseInquiryRepository";
+import { addAdminInquiryNote, isActiveInquiryStaff, listActiveInquiryStaff as queryActiveInquiryStaff, lookupCustomerInquiries as queryCustomerInquiries, updateAdminInquiryAssignment, updateAdminInquiryStatus } from "@/lib/repositories/supabaseInquiryRepository";
 import { uuidPattern } from "@/lib/validation/catalog";
-import { inquiryStatuses, validateCustomerInquiryLookup, validateInquiryNote, type InquiryStatus } from "@/lib/validation/inquiry";
+import { inquiryStatuses, validateCustomerInquiryLookup, validateInquiryAssignment, validateInquiryNote, type InquiryStatus } from "@/lib/validation/inquiry";
 import type { AdminInquiryActionState } from "@/lib/types";
+
+export async function getActiveInquiryStaff() {
+  await requireAdmin();
+  return queryActiveInquiryStaff();
+}
 
 export async function changeInquiryStatus(_previous: AdminInquiryActionState, form: FormData): Promise<AdminInquiryActionState> {
   const { supabase, user } = await requireAdmin();
@@ -38,6 +43,28 @@ export async function createInquiryNote(_previous: AdminInquiryActionState, form
   }
   revalidatePath("/admin/inquiries");
   return { success: "Internal note added." };
+}
+
+export async function changeInquiryAssignment(_previous: AdminInquiryActionState, form: FormData): Promise<AdminInquiryActionState> {
+  const { supabase, user } = await requireAdmin();
+  if (!(await allowAuthMutation("inquiry-assignment", user.id, 120))) return { error: "Request denied or too many changes. Wait and retry from this site." };
+  let assignment: ReturnType<typeof validateInquiryAssignment>;
+  try {
+    const raw = form.has("assignedTo") ? form.get("assignedTo") : undefined;
+    assignment = validateInquiryAssignment({ inquiryId: form.get("id"), assignedTo: raw === "" ? null : raw });
+  } catch {
+    return { error: "Choose a valid inquiry and staff member." };
+  }
+  try {
+    if (assignment.assignedTo && !(await isActiveInquiryStaff(assignment.assignedTo))) {
+      return { error: "This staff member is no longer active. Refresh and choose another staff member." };
+    }
+    await updateAdminInquiryAssignment(supabase, user.id, assignment.inquiryId, assignment.assignedTo);
+  } catch {
+    return { error: "Unable to confirm the assignment. Refresh the inquiry before retrying." };
+  }
+  revalidatePath("/admin/inquiries");
+  return { success: assignment.assignedTo ? "Staff assigned." : "Staff unassigned." };
 }
 
 export type CustomerInquiryLookupState = {

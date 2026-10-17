@@ -7,6 +7,9 @@ import { inquiryError, inquiryStatuses, validateCustomerInquiryInput, validateIn
 import type { AdminInquirySummary, AdminInquiryDetail } from "@/lib/types";
 export type { AdminInquirySummary, AdminInquiryDetail } from "@/lib/types";
 
+export type ActiveInquiryStaff = Pick<Tables<"admin_profiles">, "user_id" | "display_name">;
+export type AdminInquiryAssignmentDetail = AdminInquiryDetail & { assignee_id: string | null };
+
 export type InquirySubmissionResult = Database["public"]["Functions"]["submit_customer_inquiry"]["Returns"][number];
 export type AdminInquiryFilters = { page?: number; pageSize?: number; status?: InquiryStatus | "all"; q?: string };
 export type AdminInquiryDateFilters = { status?: InquiryStatus | "all"; from?: string; to?: string };
@@ -141,9 +144,9 @@ export async function listAdminInquiriesForExport(supabase: SupabaseClient<Datab
   }
 }
 
-export async function getAdminInquiryById(supabase: SupabaseClient<Database>, id: string): Promise<AdminInquiryDetail | null> {
+export async function getAdminInquiryById(supabase: SupabaseClient<Database>, id: string): Promise<AdminInquiryAssignmentDetail | null> {
   requireId(id);
-  const { data, error } = await supabase.from("inquiries").select(`${summaryColumns},message,inquiry_items(id,product_name,product_slug,quantity,unit_price,currency),inquiry_notes(id,body,created_at,author_id)`)
+  const { data, error } = await supabase.from("inquiries").select(`${summaryColumns},assignee_id,message,inquiry_items(id,product_name,product_slug,quantity,unit_price,currency),inquiry_notes(id,body,created_at,author_id)`)
     .eq("id", id).is("deleted_at", null).order("created_at", { referencedTable: "inquiry_notes", ascending: true })
     .order("id", { referencedTable: "inquiry_notes", ascending: true })
     .order("id", { referencedTable: "inquiry_items", ascending: true }).maybeSingle();
@@ -151,7 +154,52 @@ export async function getAdminInquiryById(supabase: SupabaseClient<Database>, id
   return data;
 }
 
-/** Undefined preserves the current field; a null assignee clears assignment. */
+/** Staff RLS permits only self reads. Call through an authorized server action. */
+export async function listActiveInquiryStaff(): Promise<ActiveInquiryStaff[]> {
+  const members: ActiveInquiryStaff[] = [];
+  for (let start = 0; ; start += 1000) {
+    const { data, error } = await createServiceClient().from("admin_profiles")
+      .select("user_id,display_name").eq("role", "staff").eq("active", true)
+      .order("display_name").order("user_id").range(start, start + 999);
+    if (error) throw new Error("Staff choices are temporarily unavailable.");
+    members.push(...(data ?? []));
+    if (!data || data.length < 1000) return members;
+  }
+}
+
+export async function isActiveInquiryStaff(id: string): Promise<boolean> {
+  requireId(id);
+  const { data, error } = await createServiceClient().from("admin_profiles")
+    .select("user_id").eq("user_id", id).eq("role", "staff").eq("active", true).maybeSingle();
+  if (error) throw new Error("Unable to verify the staff member.");
+  return Boolean(data);
+}
+
+export async function updateAdminInquiryAssignment(supabase: SupabaseClient<Database>, actorId: string, inquiryId: string, assignedTo: string | null): Promise<void> {
+  requireId(actorId);
+  requireId(inquiryId);
+  if (assignedTo !== null) requireId(assignedTo);
+  const current = await supabase.from("inquiries").select("assignee_id").eq("id", inquiryId).is("deleted_at", null).maybeSingle();
+  if (current.error || !current.data) throw new Error("Inquiry not found or no longer available to your session.");
+  const before = current.data.assignee_id;
+  if (before === assignedTo) return;
+  let update = supabase.from("inquiries").update({ assignee_id: assignedTo }).eq("id", inquiryId).is("deleted_at", null);
+  update = before === null ? update.is("assignee_id", null) : update.eq("assignee_id", before);
+  const { data, error } = await update.select("id").maybeSingle();
+  if (error) throw new Error(inquiryError(error.code));
+  if (!data) throw new Error("Inquiry assignment changed. Refresh and try again.");
+  const audit = await createServiceClient().from("audit_logs").insert({
+    actor_id: actorId,
+    action: assignedTo === null ? "inquiry_unassigned" : "inquiry_assigned",
+    entity_table: "inquiries",
+    entity_id: inquiryId,
+    changes: { before: { assignee_id: before }, after: { assignee_id: assignedTo } },
+  });
+  if (audit.error) throw new Error("Unable to confirm the assignment audit. Refresh before retrying.");
+}
+
+/** Existing status callers may also supply an assignee; the inquiry portal's
+ * assignment action uses updateAdminInquiryAssignment for audited changes. */
 export async function updateAdminInquiryStatus(supabase: SupabaseClient<Database>, id: string, status?: InquiryStatus, assigneeId?: string | null): Promise<Tables<"inquiries">> {
   requireId(id);
   if (status !== undefined && !inquiryStatuses.includes(status)) throw new Error("Choose a valid inquiry status.");
