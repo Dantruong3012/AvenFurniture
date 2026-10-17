@@ -33,6 +33,9 @@ const stoppedPlanRecoveryTask = 'autopilot-checkpoint-resume';
 const stoppedPlanProposalPath = `.ai-collab/tasks/${stoppedPlanRecoveryTask}/REVISED-CONSULTANT-PLAN.md`;
 const stoppedPlanReviewPath = `.ai-collab/tasks/${stoppedPlanRecoveryTask}/REVIEW.md`;
 const stoppedPlanRunnerPaths = new Set(['.ai-collab/autopilot-core.mjs', '.ai-collab/autopilot.test.mjs', '.ai-collab/orchestrator.mjs', '.ai-collab/orchestrator.integration.test.mjs', '.ai-collab/AUTOPILOT.md', '.ai-collab/README.md', `.ai-collab/tasks/${stoppedPlanRecoveryTask}/PLAN.md`, `.ai-collab/tasks/${stoppedPlanRecoveryTask}/IMPLEMENTATION.md`, stoppedPlanReviewPath, stoppedPlanProposalPath]);
+const codexQuotaRunnerTask = 'orchestrator-codex-quota-recovery';
+const codexQuotaReviewPath = `.ai-collab/tasks/${codexQuotaRunnerTask}/REVIEW.md`;
+const codexQuotaRunnerPaths = new Set(['.ai-collab/orchestrator-core.mjs', '.ai-collab/orchestrator.mjs', '.ai-collab/orchestrator.test.mjs', '.ai-collab/orchestrator.integration.test.mjs', '.ai-collab/README.md', '.ai-collab/AUTOPILOT.md', `.ai-collab/tasks/${codexQuotaRunnerTask}/PLAN.md`, `.ai-collab/tasks/${codexQuotaRunnerTask}/IMPLEMENTATION.md`, codexQuotaReviewPath]);
 const consultantRevisedPaths = ['components/layout/header.tsx', 'components/admin/catalog-shell.tsx', 'app/consultants/page.tsx', 'app/admin/(protected)/consultants/page.tsx', 'components/consultant/consultant-card.tsx', 'components/consultant/consultant-grid.tsx', 'components/consultant/zalo-contact-button.tsx', 'components/admin/consultant-form.tsx', 'components/admin/consultant-management.tsx', 'lib/consultants/actions.ts', 'lib/consultants/queries.ts', 'lib/repositories/supabaseConsultantRepository.ts', 'lib/validation/consultant.ts', 'tests/admin-consultant.test.mjs', 'tests/consultant.test.mjs'];
 const architectureBlocker = 'codex: The approved plan requires statuses incompatible with the existing database constraint; resolution exceeds the authorized paths.';
 const inquiryStatuses = ['new', 'consulting', 'completed', 'cancelled'];
@@ -79,16 +82,17 @@ function artifact(name, content) {
   writeFileSync(taskPath(checkpoint.task.id, name), content);
 }
 function pauseQuota(quota) {
+  const provider = quota.agent === 'codex' ? 'Codex' : 'Antigravity';
   checkpoint.quota = quota;
   checkpoint.status = 'PAUSED_QUOTA';
-  checkpoint.error = 'Antigravity quota exhausted';
+  checkpoint.error = `${provider} quota exhausted`;
   save();
-  updateState('PAUSED_QUOTA', quota.retryAt ? `Antigravity quota; retry after ${quota.retryAt}` : 'Antigravity quota; confirm availability before resume');
+  updateState('PAUSED_QUOTA', quota.retryAt ? `${provider} quota; retry after ${quota.retryAt}` : `${provider} quota; confirm availability before resume`);
   writeFileSync(join(workspace, 'STATE.md'), replaceField(read(join(workspace, 'STATE.md')), 'Next task', '-'));
   const data = backlog(), task = data.tasks.find((item) => item.id === checkpoint.task.id);
   setTaskRow(data, task, 'PAUSED_QUOTA');
-  event('PAUSED_QUOTA', { retryAt: quota.retryAt });
-  writeHandoff('RESOURCE_EXHAUSTED', quota.retryAt ? `After ${quota.retryAt}, inspect status and use resume; use --quota-ready earlier only after a successful CLI proof.` : 'Verify Antigravity availability, then use resume --quota-ready.');
+  event('PAUSED_QUOTA', { agent: quota.agent ?? 'antigravity', retryAt: quota.retryAt });
+  writeHandoff('RESOURCE_EXHAUSTED', quota.retryAt ? `After ${quota.retryAt}, inspect status and use resume; use --quota-ready earlier only after a successful CLI proof.` : `Verify ${provider} CLI availability, then use resume --quota-ready.`);
 }
 function restoreLegacyQuotaArtifact() {
   const path = taskPath(checkpoint.task.id, 'IMPLEMENTATION.md');
@@ -504,6 +508,60 @@ function recoverGitPermission() {
   } finally { releaseLock(lock); }
 }
 const boundary = 'Read AGENTS.md. Work only on this task. Never push, deploy, access external Production services, run a Production migration, change credentials/secrets, or modify another task. Do not use MCP services or bypass permission checks. Never change Git HEAD/index unless this prompt explicitly requests the commit phase. Do not modify orchestrator code/config or test commands. Do not write status artifacts; the coordinator persists your structured response.';
+function recoverCodexQuota() {
+  acquireLock(lock, true);
+  try {
+    if (!existsSync(checkpointPath)) throw new Error('No checkpoint to recover');
+    checkpoint = JSON.parse(read(checkpointPath));
+    const id = checkpoint.task?.id;
+    const errorText = 'Process exited 1; inspect private log';
+    if (id !== 'storefront-consultant-zalo' || checkpoint.status !== 'BLOCKED' || checkpoint.phase !== 'IN_PROGRESS' || checkpoint.round !== 1 || checkpoint.error !== errorText || checkpoint.sequence !== 4 || !checkpoint.planReceipt || !checkpoint.paths?.length) throw new Error('Only the saved Codex usage-limit checkpoint can be recovered');
+    if (checkpoint.configDigest !== configDigest || checkpoint.scriptsDigest !== digest(requiredScripts())) throw new Error('Runner configuration or required checks changed');
+    const data = backlog();
+    const state = read(join(workspace, 'STATE.md'));
+    if (data.tasks.find((task) => task.id === id)?.status !== 'BLOCKED' || field(data.content, 'Roadmap approval') !== 'APPROVED' || field(state, 'Active task') !== id || field(state, 'Current phase') !== 'BLOCKED') throw new Error('Workflow state differs from blocked checkpoint');
+    const receipt = checkpoint.planReceipt;
+    const receiptPath = join(runtime, `${id}-${receipt.sequence}-plan.receipt.json`);
+    if (!existsSync(receiptPath) || digest(JSON.parse(read(receiptPath))) !== digest(receipt) || receipt.agent !== 'antigravity' || receipt.operation !== 'plan' || receipt.exitCode !== 0 || receipt.status !== 'READY' || receipt.result?.status !== 'READY' || receipt.inputDigest !== receipt.outputDigest || JSON.stringify(validatePaths(receipt.result.paths)) !== JSON.stringify(checkpoint.paths)) throw new Error('Saved Antigravity Planning receipt differs from source ownership');
+    const failedLog = join(runtime, `${id}-${checkpoint.sequence}-implement.log`);
+    if (!existsSync(failedLog) || existsSync(failedLog.replace(/\.log$/, '.receipt.json'))) throw new Error('Missing failed Codex log or an implementation receipt already exists');
+    const logText = read(failedLog);
+    const quota = quotaFailure(logText, statSync(failedLog).mtimeMs, 'codex');
+    if (quota?.agent !== 'codex' || !/"type":"turn.failed"/.test(logText)) throw new Error('Saved Codex log does not prove usage-limit exhaustion');
+    quota.logDigest = digest(logText);
+    const blocked = `# Implementation: ${id}\n\nStatus: BLOCKED\n\n${errorText}\n\nSee local checkpoint and logs; preserve all working changes.\n`;
+    if (read(taskPath(id, 'IMPLEMENTATION.md')) !== blocked || field(read(taskPath(id, 'PLAN.md')), 'Status') !== 'APPROVED') throw new Error('Original blocker artifact or approved task plan differs');
+    if (git('diff', '--cached', '--name-only')) throw new Error('Unexpected staged changes before Codex quota recovery');
+    const head = git('rev-parse', 'HEAD');
+    if (git('rev-parse', `${head}^`) !== checkpoint.baseHead) throw new Error('Recovery requires exactly one reviewed runner commit');
+    const committed = git('diff', '--name-only', checkpoint.baseHead, head).split('\n').filter(Boolean);
+    if (!committed.includes('.ai-collab/orchestrator.mjs') || !committed.includes(codexQuotaReviewPath) || committed.some((path) => !codexQuotaRunnerPaths.has(path))) throw new Error('Codex quota runner upgrade contains unreviewed paths');
+    const review = git('show', `${head}:${codexQuotaReviewPath}`);
+    const runnerPlan = git('show', `${head}:.ai-collab/tasks/${codexQuotaRunnerTask}/PLAN.md`);
+    if (field(review, 'Status') !== 'APPROVED' || !/^Reviewer: Antigravity\b/m.test(review) || field(runnerPlan, 'Status') !== 'APPROVED' || !/^Planner: Antigravity\b/m.test(runnerPlan) || field(review, 'Reviewed blocked HEAD') !== checkpoint.baseHead || field(review, 'Reviewed task') !== id || field(review, 'Reviewed failed log digest') !== quota.logDigest) throw new Error('Matching Antigravity runner review and log digest are required');
+    const metadata = new Set(['.ai-collab/BACKLOG.md', '.ai-collab/STATE.md', `.ai-collab/tasks/${id}/PLAN.md`, `.ai-collab/tasks/${id}/IMPLEMENTATION.md`]);
+    const allowedDirty = new Set([...metadata, ...checkpoint.paths]);
+    if (changedWorkingPaths().some((path) => !allowedDirty.has(path))) throw new Error('Uncommitted changes outside task ownership');
+    const current = snapshot(root);
+    if (changes(checkpoint.baseline, current).some((path) => !allowedDirty.has(path) && !codexQuotaRunnerPaths.has(path))) throw new Error('Source outside task or reviewed runner changed since Planning');
+    const archive = join(runtime, `${id}-${checkpoint.sequence}-codex-quota-blocker.md`);
+    if (existsSync(archive)) throw new Error('Codex quota blocker archive already exists');
+    writeFileSync(archive, blocked, { mode: 0o600 });
+    artifact('IMPLEMENTATION.md', `# Implementation: ${id}\n\nStatus: PAUSED_QUOTA\n\nCodex CLI usage limit interrupted implementation. Partial task-owned source and original failed log are preserved. Verify CLI availability before resume --quota-ready.\n`);
+    checkpoint.codexQuotaRecoveryHistory = [...(checkpoint.codexQuotaRecoveryHistory ?? []), { status: 'BLOCKED', phase: checkpoint.phase, round: checkpoint.round, error: checkpoint.error, sequence: checkpoint.sequence, baseHead: checkpoint.baseHead, blockedArtifactDigest: digest(blocked), failedLogDigest: quota.logDigest }];
+    const priorBaseline = checkpoint.baseline;
+    const rebased = snapshot(root);
+    for (const path of checkpoint.paths) {
+      if (Object.hasOwn(priorBaseline, path)) rebased[path] = priorBaseline[path];
+      else delete rebased[path];
+    }
+    checkpoint.baseline = rebased;
+    checkpoint.runnerUpgrade = { from: checkpoint.baseHead, to: head, paths: committed };
+    checkpoint.baseHead = head;
+    pauseQuota(quota);
+    event('CODEX_QUOTA_RECOVERED', { failedSequence: 4, reviewedCommit: head });
+  } finally { releaseLock(lock); }
+}
 function reviewContext() {
   const tracked = new Set(git('ls-tree', '-r', '--name-only', checkpoint.baseHead).split('\n'));
   const newFiles = checkpoint.paths.filter((path) => !tracked.has(path) && existsSync(join(root, path))).map((path) => {
@@ -537,11 +595,9 @@ async function agent(kind, phase, prompt, statuses, transientAttempt = 0) {
     result = await execute(args, { root: isolatedCwd ?? root, timeoutMs: config.timeoutMs, stopFile, log: `${prefix}.log`, input: kind === 'codex' ? `${boundary}\n${prompt}` : undefined, env: agentEnvironment(),
       onChild: (pid) => atomicJSON(join(lock, 'owner.json'), { pid: process.pid, childPid: pid }) });
   } catch (error) {
-    if (kind === 'antigravity') {
-      error.quota = quotaFailure(error.output);
-      error.context = contextFailure(error.output);
-      if (error.context) error.message = 'Antigravity context limit reached; split or reduce task context before retry';
-    }
+    error.quota = quotaFailure(error.output, Date.now(), kind);
+    error.context = contextFailure(error.output);
+    if (error.context) error.message = `${kind === 'codex' ? 'Codex' : 'Antigravity'} context limit reached; split or reduce task context before retry`;
     throw error;
   } finally {
     if (isolatedCwd) rmSync(isolatedCwd, { recursive: true, force: true });
@@ -772,7 +828,8 @@ async function run(resume) {
     if (checkpoint?.task && !['BLOCKED', 'PAUSED_QUOTA', 'DONE'].includes(checkpoint.status)) {
       if (error.quota) {
         pauseQuota(error.quota);
-        throw new Error(error.quota.retryAt ? `Antigravity quota exhausted; paused until ${error.quota.retryAt}` : 'Antigravity quota exhausted; paused until availability is confirmed');
+        const provider = error.quota.agent === 'codex' ? 'Codex' : 'Antigravity';
+        throw new Error(error.quota.retryAt ? `${provider} quota exhausted; paused until ${error.quota.retryAt}` : `${provider} quota exhausted; paused until availability is confirmed`);
       }
       checkpoint.status = error.message === 'STOPPED' ? 'STOPPED' : 'BLOCKED'; checkpoint.error = error.message; save();
       if (checkpoint.status === 'BLOCKED') {
@@ -797,6 +854,7 @@ try {
   else if (action === 'recover-architecture') recoverArchitecture();
   else if (action === 'recover-architecture-plan') recoverArchitecturePlan();
   else if (action === 'recover-git-permission') recoverGitPermission();
+  else if (action === 'recover-codex-quota') recoverCodexQuota();
   else if (['release-status', 'release-push', 'doctor'].includes(action)) {
     const { releaseCommand } = await import('./release.mjs');
     await releaseCommand(root, action);
@@ -807,5 +865,5 @@ try {
     console.log(JSON.stringify({ checkpoint: state ? { task: state.task?.id ?? null, status: state.status, phase: state.phase, round: state.round, error: state.error, quota: state.quota ?? null, lastTokenUsage: state.lastTokenUsage ?? null } : null, handoff: existsSync(join(runtime, 'HANDOFF.md')) ? '.ai-collab/.runtime/HANDOFF.md' : null, next: select()?.id ?? null, paused: tasks.filter((task) => task.status === 'PAUSED_QUOTA').map((task) => task.id), blocked: tasks.filter((task) => task.status !== 'PAUSED_QUOTA' && hasBlocker(task)).map((task) => task.id), lock: existsSync(join(lock, 'owner.json')) ? JSON.parse(read(join(lock, 'owner.json'))) : null, receipts: existsSync(runtime) ? readdirSync(runtime).filter((name) => name.endsWith('.receipt.json')).length : 0 }, null, 2));
   }
   else if (action === 'stop') { mkdirSync(runtime, { recursive: true }); writeFileSync(stopFile, 'stop\n'); console.log('Stop requested; active child will be terminated and checkpoint preserved.'); }
-  else throw new Error('Usage: node .ai-collab/orchestrator.mjs run|resume [--quota-ready]|recover-quota|recover-plan-path|replan|recover-stopped-plan|recover-architecture|recover-architecture-plan|recover-git-permission|status|stop|doctor|release-status|release-push');
+  else throw new Error('Usage: node .ai-collab/orchestrator.mjs run|resume [--quota-ready]|recover-quota|recover-plan-path|replan|recover-stopped-plan|recover-architecture|recover-architecture-plan|recover-git-permission|recover-codex-quota|status|stop|doctor|release-status|release-push');
 } catch (error) { console.error(`Orchestrator stopped: ${error.message}`); process.exitCode = 1; }

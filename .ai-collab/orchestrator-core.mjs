@@ -34,11 +34,27 @@ export function snapshot(root) {
   }));
 }
 export function digest(value) { return createHash('sha256').update(JSON.stringify(value)).digest('hex'); }
-export function quotaFailure(output, observedAt = Date.now()) {
-  if (!/RESOURCE_EXHAUSTED|Individual quota reached/i.test(output ?? '')) return null;
-  const reset = String(output).match(/Resets in\s+(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?/i);
+export function quotaFailure(output, observedAt = Date.now(), agentHint = null) {
+  const message = String(output ?? '');
+  const antigravity = /RESOURCE_EXHAUSTED|Individual quota reached/i.test(message);
+  const codexPattern = /(?:you(?:'|’)ve hit your usage limit|usage limit[^\n]{0,160}(?:purchase more credits|try again at))/i;
+  const codexEvents = message.split('\n').flatMap((line) => {
+    try { const event = JSON.parse(line); return event && typeof event === 'object' && typeof event.type === 'string' ? [event] : []; }
+    catch { return []; }
+  });
+  // Ignore the same words when they merely appear in a file or command output
+  // read by Codex. A structured failure event is authoritative when present.
+  const failures = codexEvents.filter((event) => ['turn.failed', 'error'].includes(event.type));
+  const codex = codexEvents.length
+    ? failures.some((event) => codexPattern.test(String(event.error?.message ?? event.message ?? '')))
+    : codexPattern.test(message);
+  if (agentHint === 'codex' ? !codex : agentHint === 'antigravity' ? !antigravity : !antigravity && !codex) return null;
+  const agent = agentHint ?? (codex ? 'codex' : 'antigravity');
+  const reset = message.match(/Resets in\s+(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?/i);
   const seconds = reset ? Number(reset[1] ?? 0) * 3600 + Number(reset[2] ?? 0) * 60 + Number(reset[3] ?? 0) : 0;
-  return { kind: 'RESOURCE_EXHAUSTED', observedAt: new Date(observedAt).toISOString(), retryAt: seconds > 0 ? new Date(observedAt + seconds * 1000).toISOString() : null };
+  // A bare "try again at 5:26 AM" has no date or timezone. Never infer a reset
+  // from the host clock; require an operator-confirmed CLI proof before resume.
+  return { kind: 'RESOURCE_EXHAUSTED', agent, observedAt: new Date(observedAt).toISOString(), retryAt: seconds > 0 && agent === 'antigravity' ? new Date(observedAt + seconds * 1000).toISOString() : null };
 }
 export function contextFailure(output) {
   if (quotaFailure(output)) return false;

@@ -13,6 +13,14 @@ test('classify quota separately from implementation and architecture failures', 
   assert.equal(quotaFailure('Architecture blocker: transaction needed'), null);
   assert.equal(quotaFailure('Process exited 3; inspect private log'), null);
   assert.equal(quotaFailure('RESOURCE_EXHAUSTED without reset time').retryAt, null);
+  const codex = quotaFailure('{"type":"turn.failed","error":{"message":"You’ve hit your usage limit. Upgrade to Pro or try again at 5:26 AM."}}', Date.UTC(2026, 9, 17), 'codex');
+  assert.equal(codex.agent, 'codex');
+  assert.equal(codex.retryAt, null);
+  assert.equal(codex.kind, 'RESOURCE_EXHAUSTED');
+  assert.equal(quotaFailure('You’ve hit your usage limit. RESOURCE_EXHAUSTED appears in a copied README.', Date.UTC(2026, 9, 17), 'codex').agent, 'codex');
+  assert.equal(quotaFailure('You’ve hit your usage limit.', Date.UTC(2026, 9, 17), 'antigravity'), null);
+  assert.equal(quotaFailure('Compilation failed: usage limit validation', Date.UTC(2026, 9, 17), 'codex'), null);
+  assert.equal(quotaFailure('{"type":"item.completed","item":{"text":"You’ve hit your usage limit."}}\n{"type":"turn.failed","error":{"message":"Compilation failed"}}', Date.UTC(2026, 9, 17), 'codex'), null);
 });
 test('distinguish context exhaustion, record real CLI usage, and generate a safe handoff', () => {
   assert.equal(contextFailure('maximum context length exceeded'), true);

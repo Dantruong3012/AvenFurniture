@@ -39,6 +39,12 @@ if(agy&&phase==='plan'&&mode==='replan-block'&&prompt.includes('Revised fixture 
   if(!prompt.includes('app/cart/page.tsx')||!prompt.includes('Existing tracked application and test paths'))process.exit(7);
   result.paths=existsSync('.ai-collab/.runtime/wrong-replan-paths')?['src/cart/page.tsx']:['t1.txt','app/cart/page.tsx','components/forms/contact-form.tsx'];
 }
+if(phase==='implement'&&(mode==='codex-quota-always'||mode==='codex-quota-once'&&!existsSync('.ai-collab/.runtime/codex-quota-seen'))){
+  writeFileSync('.ai-collab/.runtime/codex-quota-seen','yes');
+  writeFileSync(id+'.txt','partial');
+  console.log(JSON.stringify({type:'turn.failed',error:{message:'You’ve hit your usage limit. Try again at 5:26 AM.'}}));
+  process.exit(1);
+}
 if(phase==='implement') {
   if(mode==='architecture-block'&&!existsSync('.ai-collab/.runtime/architecture-once')){
     writeFileSync('.ai-collab/.runtime/architecture-once','yes');
@@ -280,6 +286,83 @@ test('unknown quota reset time requires explicit --quota-ready',async()=>{
   const resumed=await run(dir,'resume','--quota-ready');assert.equal(resumed.code,0,resumed.output);
   assert.equal(events(dir).filter(e=>e.phase==='DONE').length,1);
  }finally{rmSync(dir,{recursive:true});}
+});
+test('Codex usage limit pauses implementation without retry and preserves partial source', async () => {
+  const dir=fixture('codex-quota-once');
+  try {
+    const first=await run(dir); assert.equal(first.code,1,first.output);
+    const paused=checkpoint(dir); assert.equal(paused.status,'PAUSED_QUOTA'); assert.equal(paused.phase,'IN_PROGRESS');
+    assert.equal(paused.quota.agent,'codex'); assert.equal(paused.quota.retryAt,null);
+    assert.equal(readFileSync(join(dir,'t1.txt'),'utf8'),'partial');
+    assert.equal(events(dir).filter(e=>e.phase==='CLI_STARTED'&&e.operation==='implement').length,1);
+    const saved=readFileSync(join(dir,'.ai-collab/.runtime/checkpoint.json'),'utf8');
+    const refused=await run(dir,'resume'); assert.equal(refused.code,1); assert.match(refused.output,/Quota reset time unknown/);
+    assert.equal(readFileSync(join(dir,'.ai-collab/.runtime/checkpoint.json'),'utf8'),saved);
+    const resumed=await run(dir,'resume','--quota-ready'); assert.equal(resumed.code,0,resumed.output);
+    assert.equal(checkpoint(dir).status,'DONE');
+  } finally {rmSync(dir,{recursive:true});}
+});
+test('Codex usage limit after a controlled resume pauses again without a task commit',async()=>{
+  const dir=fixture('codex-quota-always');try{
+    assert.equal((await run(dir)).code,1);const first=checkpoint(dir);assert.equal(first.status,'PAUSED_QUOTA');
+    const again=await run(dir,'resume','--quota-ready');assert.equal(again.code,1,again.output);
+    const second=checkpoint(dir);assert.equal(second.status,'PAUSED_QUOTA');assert.equal(second.phase,'IN_PROGRESS');
+    assert.equal(events(dir).filter(e=>e.phase==='CLI_STARTED'&&e.operation==='implement').length,2);
+    assert.equal(events(dir).filter(e=>e.phase==='DONE').length,0);
+    assert.equal(gitCall(dir,'rev-list','--count','HEAD'),'1');
+  }finally{rmSync(dir,{recursive:true});}
+});
+async function legacyCodexQuotaFixture(reason = 'valid') {
+  const dir=fixture('codex-quota-once');
+  const first=await run(dir); assert.equal(first.code,1,first.output);
+  const id='storefront-consultant-zalo';
+  const state=checkpoint(dir); assert.equal(state.status,'PAUSED_QUOTA');
+  state.task.id=id; state.status='BLOCKED'; state.error='Process exited 1; inspect private log'; state.sequence=4; delete state.quota;
+  writeFileSync(join(dir,'.ai-collab/.runtime/checkpoint.json'),JSON.stringify(state));
+  copyFileSync(join(dir,'.ai-collab/.runtime/t1-1-plan.receipt.json'),join(dir,`.ai-collab/.runtime/${id}-1-plan.receipt.json`));
+  copyFileSync(join(dir,'.ai-collab/.runtime/t1-2-implement.log'),join(dir,`.ai-collab/.runtime/${id}-4-implement.log`));
+  const backlogPath=join(dir,'.ai-collab/BACKLOG.md');
+  writeFileSync(backlogPath,readFileSync(backlogPath,'utf8').replace('| t1 |',`| ${id} |`).replace('| PAUSED_QUOTA |','| BLOCKED |'));
+  const statePath=join(dir,'.ai-collab/STATE.md');
+  writeFileSync(statePath,readFileSync(statePath,'utf8').replace('Active task: t1',`Active task: ${id}`).replace('Current phase: PAUSED_QUOTA','Current phase: BLOCKED'));
+  mkdirSync(join(dir,`.ai-collab/tasks/${id}`),{recursive:true});
+  copyFileSync(join(dir,'.ai-collab/tasks/t1/PLAN.md'),join(dir,`.ai-collab/tasks/${id}/PLAN.md`));
+  rmSync(join(dir,'.ai-collab/tasks/t1/PLAN.md'));
+  writeFileSync(join(dir,`.ai-collab/tasks/${id}/IMPLEMENTATION.md`),`# Implementation: ${id}\n\nStatus: BLOCKED\n\nProcess exited 1; inspect private log\n\nSee local checkpoint and logs; preserve all working changes.\n`);
+  const log=readFileSync(join(dir,`.ai-collab/.runtime/${id}-4-implement.log`),'utf8');
+  const logDigest=createHash('sha256').update(JSON.stringify(log)).digest('hex');
+  const upgradeDir=join(dir,'.ai-collab/tasks/orchestrator-codex-quota-recovery');mkdirSync(upgradeDir,{recursive:true});
+  writeFileSync(join(upgradeDir,'PLAN.md'),'# Plan: orchestrator-codex-quota-recovery\n\nStatus: APPROVED\nPlanner: Antigravity\n');
+  writeFileSync(join(upgradeDir,'REVIEW.md'),`# Review: orchestrator-codex-quota-recovery\n\nStatus: ${reason==='unapproved-review'?'CHANGES_REQUESTED':'APPROVED'}\nReviewer: Antigravity\nReviewed blocked HEAD: ${state.baseHead}\nReviewed task: ${id}\nReviewed failed log digest: ${reason==='wrong-log-digest'?'0'.repeat(64):logDigest}\n`);
+  const runner=join(dir,'.ai-collab/orchestrator.mjs');writeFileSync(runner,readFileSync(runner,'utf8')+'\n// reviewed Codex quota fixture\n');
+  if(reason==='committed-source'){writeFileSync(join(dir,'foreign.js'),'unreviewed\n');gitCall(dir,'add','foreign.js');}
+  gitCall(dir,'add','.ai-collab/orchestrator.mjs','.ai-collab/tasks/orchestrator-codex-quota-recovery/PLAN.md','.ai-collab/tasks/orchestrator-codex-quota-recovery/REVIEW.md');
+  gitCall(dir,'commit','-qm','fix(orchestrator): reviewed Codex quota recovery');
+  if(reason==='dirty-source')writeFileSync(join(dir,'foreign.js'),'unreviewed\n');
+  if(reason==='staged'){writeFileSync(join(dir,'foreign.js'),'staged\n');gitCall(dir,'add','foreign.js');}
+  if(reason==='tampered-log')writeFileSync(join(dir,`.ai-collab/.runtime/${id}-4-implement.log`),log+'\nchanged\n');
+  return dir;
+}
+test('reviewed legacy Codex quota recovery keeps partial source and requires controlled resume',async()=>{
+  const dir=await legacyCodexQuotaFixture();try{
+    const path=join(dir,'.ai-collab/.runtime/checkpoint.json'),prior=checkpoint(dir);
+    const log=readFileSync(join(dir,'.ai-collab/.runtime/storefront-consultant-zalo-4-implement.log'),'utf8');
+    const recovered=await run(dir,'recover-codex-quota');assert.equal(recovered.code,0,recovered.output);
+    const paused=checkpoint(dir);assert.equal(paused.status,'PAUSED_QUOTA');assert.equal(paused.phase,'IN_PROGRESS');assert.equal(paused.quota.agent,'codex');assert.equal(paused.quota.retryAt,null);
+    assert.equal(paused.codexQuotaRecoveryHistory[0].error,prior.error);
+    assert.equal(readFileSync(join(dir,'t1.txt'),'utf8'),'partial');
+    assert.equal(readFileSync(join(dir,'.ai-collab/.runtime/storefront-consultant-zalo-4-implement.log'),'utf8'),log);
+    assert.ok(existsSync(join(dir,'.ai-collab/.runtime/storefront-consultant-zalo-4-codex-quota-blocker.md')));
+    const saved=readFileSync(path,'utf8');const refused=await run(dir,'resume');assert.equal(refused.code,1);assert.equal(readFileSync(path,'utf8'),saved);
+    const resumed=await run(dir,'resume','--quota-ready');assert.equal(resumed.code,0,resumed.output);assert.equal(checkpoint(dir).status,'DONE');
+  }finally{rmSync(dir,{recursive:true});}
+});
+for(const reason of ['unapproved-review','wrong-log-digest','committed-source','dirty-source','staged','tampered-log'])test(`legacy Codex quota recovery rejects ${reason} without changing checkpoint`,async()=>{
+  const dir=await legacyCodexQuotaFixture(reason);try{
+    const path=join(dir,'.ai-collab/.runtime/checkpoint.json'),saved=readFileSync(path,'utf8');
+    const failed=await run(dir,'recover-codex-quota');assert.equal(failed.code,1,failed.output);assert.equal(readFileSync(path,'utf8'),saved);
+    assert.ok(!existsSync(join(dir,'.ai-collab/.runtime/storefront-consultant-zalo-4-codex-quota-blocker.md')));
+  }finally{rmSync(dir,{recursive:true});}
 });
 test('runner upgrade requires committed APPROVED review; rejected review preserves checkpoint',async()=>{
  const dir=fixture('quota-plan');try {
