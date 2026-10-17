@@ -3,7 +3,7 @@
 Status: READY_FOR_REVIEW
 Changed paths: components/layout/header.tsx, components/admin/catalog-shell.tsx, app/consultants/page.tsx, app/admin/(protected)/consultants/page.tsx, components/consultant/consultant-card.tsx, components/consultant/consultant-grid.tsx, components/consultant/zalo-contact-button.tsx, components/admin/consultant-form.tsx, components/admin/consultant-management.tsx, lib/consultants/actions.ts, lib/consultants/queries.ts, lib/repositories/supabaseConsultantRepository.ts, lib/validation/consultant.ts, tests/admin-consultant.test.mjs, tests/consultant.test.mjs
 Commit: feat(storefront-consultant-zalo): implement approved task
-Commit hash: -
+Commit hash: 24a596140c46f2c385a892ebb44d640a8564ac39
 
 Completed the consultant directory, validated Zalo links, protected admin management, and local test coverage.
 
