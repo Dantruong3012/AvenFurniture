@@ -3,7 +3,7 @@
 Status: READY_FOR_REVIEW
 Changed paths: app/portal/page.tsx, components/portal/customer-portal.tsx, components/layout/header.tsx, lib/inquiries/actions.ts, lib/repositories/supabaseInquiryRepository.ts, lib/validation/inquiry.ts, tests/storefront-inquiry.test.mjs
 Commit: feat(storefront-customer-portal): implement approved task
-Commit hash: -
+Commit hash: 3b6a856d7d0403886ce0e0acc426b24a5ee9840d
 
 Implemented the customer inquiry lookup portal with email or phone matching, rate limiting, and a bounded customer-safe history view.
 
