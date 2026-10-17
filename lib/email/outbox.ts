@@ -4,7 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/lib/supabase/database.types";
 import type { OutboxHealthSummary } from "@/lib/types";
 import { renderEmailTemplate } from "./templates";
-import type { DeliveryOutcome, DispatchResult, EmailEventDraft, EmailEventTransaction, EmailEventType, EmailOutboxEvent, OutboxLoopOptions, OutboxRecord, OutboxStore, OutboxWorkerOptions, RetryPolicy } from "./types";
+import type { DeliveryOutcome, DispatchResult, EmailEventDraft, EmailEventTransaction, EmailEventType, EmailOutboxEvent, EmailTemplatePayload, OutboxLoopOptions, OutboxRecord, OutboxStore, OutboxWorkerOptions, RetryPolicy } from "./types";
 
 const defaultRetry: RetryPolicy = { maxAttempts: 5, baseDelayMs: 1_000, maxDelayMs: 3_600_000 };
 const iso = (time: number) => new Date(time).toISOString();
@@ -84,6 +84,19 @@ export async function enqueueEmailEvent(transaction: EmailEventTransaction, inpu
   const saved = await transaction.insertOrGet({ ...draft, idempotency_key: key });
   if (saved.idempotency_key !== key || saved.schema_version !== draft.schema_version || saved.event_type !== draft.event_type || canonical(saved.payload) !== canonical(draft.payload)) throw new Error("Email event idempotency conflict.");
   return saved;
+}
+
+/** Decode only validated version-one inquiry change envelopes from persistence. */
+export function buildInquiryChangeMessage(record: OutboxRecord): EmailTemplatePayload {
+  if (record.event_type !== "inquiry.assigned" && record.event_type !== "inquiry.status_changed") {
+    throw new Error("Unsupported inquiry email event.");
+  }
+  const draft = validateEmailEventDraft({ schema_version: record.schema_version, event_type: record.event_type,
+    occurrence_id: record.event_id, payload: record.payload });
+  if (record.idempotency_key !== emailEventIdempotencyKey(draft.event_type, draft.occurrence_id) ||
+      draft.payload.inquiryId !== record.inquiry_id) throw new Error("Invalid persisted email event.");
+  if (!("template" in draft.payload)) throw new Error("Invalid persisted email event.");
+  return { template: draft.payload.template, data: draft.payload.data } as EmailTemplatePayload;
 }
 
 function positiveInteger(value: number, name: string, max = 2_147_483_647) {
@@ -307,7 +320,7 @@ export async function dispatchOutboxBatch(options: OutboxWorkerOptions): Promise
           controller.signal.throwIfAborted();
           if (now() >= Date.parse(record.locked_until!)) throw new Error("Lease expired.");
           const message = "template" in built ? renderEmailTemplate(built) : built;
-          return mailer.send(message, { idempotencyKey: record.event_id, signal: controller.signal });
+          return mailer.send(message, { idempotencyKey: record.idempotency_key ?? record.event_id, signal: controller.signal });
         })(),
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => {

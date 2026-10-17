@@ -125,7 +125,7 @@ test("admin repository uses caller client for paginated status/search queries, d
   const { supabase, requests } = adminClient([
     { body: [{ ...row, inquiry_items: [{ count: 2 }] }], headers: { "content-range": "2-2/3" } },
     { body: [{ ...row, inquiry_items: [item], inquiry_notes: [{ body: "note" }] }] },
-    { body: [{ ...row, status: "consulting" }] }, { body: [row] },
+    { body: { ...row, status: "consulting" } }, { body: row },
     { body: [{ id }] }, { body: { id, inquiry_id: id, author_id: id, body: "Note" } }, { body: [] },
   ]);
   const listed = await repo.listAdminInquiries(supabase, { page: 2, pageSize: 2, status: "new", q: 'a%,)"\\_' });
@@ -144,9 +144,10 @@ test("admin repository uses caller client for paginated status/search queries, d
   assert.equal(requests[1].url.searchParams.get("inquiry_items.order"), "id.asc");
   assert.doesNotMatch(requests[1].url.searchParams.get("select"), /\*|original_submission|idempotency_key/);
   await repo.updateAdminInquiryStatus(supabase, id, "consulting");
-  assert.deepEqual(requests[2].body, { status: "consulting" });
+  assert.equal(requests[2].url.pathname, "/rest/v1/rpc/change_inquiry_status");
+  assert.deepEqual(requests[2].body, { p_id: id, p_status: "consulting", p_assignee_id: null, p_change_assignee: false, p_admin_url: null });
   await repo.updateAdminInquiryStatus(supabase, id, undefined, null);
-  assert.deepEqual(requests[3].body, { assignee_id: null });
+  assert.deepEqual(requests[3].body, { p_id: id, p_status: null, p_assignee_id: null, p_change_assignee: true, p_admin_url: null });
   assert.equal((await repo.addAdminInquiryNote(supabase, id, " Note ")).body, "Note");
   assert.equal(requests[4].url.searchParams.get("deleted_at"), "is.null");
   assert.deepEqual(requests[5].body, { inquiry_id: id, body: "Note" });
@@ -164,7 +165,7 @@ test("admin repository rejects invalid mutations/filters before querying and sur
   await assert.rejects(repo.updateAdminInquiryStatus(supabase, id, undefined, "bad"));
   for (const body of [" ", "x".repeat(10001), null]) await assert.rejects(repo.addAdminInquiryNote(supabase, id, body));
   assert.equal(requests.length, 0);
-  const missing = adminClient([{ body: [] }]);
+  const missing = adminClient([{ body: null }]);
   await assert.rejects(repo.updateAdminInquiryStatus(missing.supabase, id, "completed"), /not found/);
   const denied = adminClient([{ body: [{ id }] }, { status: 403, body: { code: "42501", message: "private detail" } }]);
   await assert.rejects(repo.addAdminInquiryNote(denied.supabase, id, "note"), /session or permissions/);
@@ -204,7 +205,7 @@ test("inquiry RPC and staff access on isolated PostgreSQL with all local migrati
     create role authenticated nologin;
     create role service_role nologin bypassrls;
     create schema auth;
-    create table auth.users(id uuid primary key);
+    create table auth.users(id uuid primary key, email text);
     create table auth.sessions(id uuid primary key, user_id uuid not null references auth.users(id),
       created_at timestamptz not null default now(), not_after timestamptz);
     create function auth.jwt() returns jsonb language sql stable as
@@ -217,7 +218,7 @@ test("inquiry RPC and staff access on isolated PostgreSQL with all local migrati
   const files = (await readdir(new URL("../supabase/migrations/", import.meta.url))).filter((file) => file.endsWith(".sql")).sort();
   for (const file of files) await db.exec(await readFile(new URL(`../supabase/migrations/${file}`, import.meta.url), "utf8"));
   const staff = randomUUID(), session = randomUUID(), outsider = randomUUID();
-  await db.query("insert into auth.users values ($1),($2)", [staff, outsider]);
+  await db.query("insert into auth.users values ($1,'staff@example.com'),($2,'outsider@example.com')", [staff, outsider]);
   await db.query("insert into auth.sessions(id,user_id) values ($1,$2)", [session, staff]);
   await db.query("insert into public.admin_profiles(user_id,display_name,role) values ($1,'Staff','staff')", [staff]);
   const sqlItem = { product_id: null, product_name: "Oak chair", product_slug: "oak-chair", unit_price: 120.50, currency: "USD", quantity: 2 };
@@ -306,13 +307,14 @@ test("inquiry RPC and staff access on isolated PostgreSQL with all local migrati
       from public.inquiries i where deleted_at is null and status='new' and contact_name ilike '%Customer%'
       order by created_at desc,id desc limit 25 offset 0`);
     assert.ok(listed.rows.some((row) => row.id === created.id && row.item_count === 1));
-    const updated = await db.query("update public.inquiries set status='consulting',assignee_id=$2 where id=$1 returning *", [created.id, staff]);
+    await assert.rejects(db.query("update public.inquiries set status='consulting',assignee_id=$2 where id=$1 returning *", [created.id, staff]), (error) => error.code === "42501");
+    const updated = await db.query("select (public.change_inquiry_status($1,'consulting',$2,true,$3)).*", [created.id, staff, `http://localhost:3000/admin/inquiries?inquiry=${created.id}`]);
     assert.equal(updated.rows[0].status, "consulting"); assert.equal(updated.rows[0].assignee_id, staff);
     for (const status of ["new", "consulting", "completed", "cancelled"]) {
-      const changed = await db.query("update public.inquiries set status=$2 where id=$1 returning status", [created.id, status]);
+      const changed = await db.query("select (public.change_inquiry_status($1,$2)).*", [created.id, status]);
       assert.equal(changed.rows[0].status, status);
     }
-    await assert.rejects(db.query("update public.inquiries set status='unknown' where id=$1", [created.id]), (error) => error.code === "23514");
+    await assert.rejects(db.query("select public.change_inquiry_status($1,'unknown')", [created.id]), (error) => error.code === "22023");
     const note = await db.query("insert into public.inquiry_notes(inquiry_id,body) values ($1,'Called customer') returning *", [created.id]);
     assert.equal(note.rows[0].author_id, staff);
     assert.equal((await db.query("select * from public.inquiry_items where inquiry_id=$1", [created.id])).rows.length, 1);
@@ -323,7 +325,7 @@ test("inquiry RPC and staff access on isolated PostgreSQL with all local migrati
   await t.test("unprovisioned and revoked sessions cannot read or mutate inquiries", async () => {
     const denied = async (user) => as("authenticated", user, async () => {
       for (const table of ["inquiries", "inquiry_items", "inquiry_notes"]) assert.equal((await db.query(`select * from public.${table}`)).rows.length, 0);
-      assert.equal((await db.query("update public.inquiries set status='completed' where id=$1 returning id", [created.id])).rows.length, 0);
+      await assert.rejects(db.query("select public.change_inquiry_status($1,'completed')", [created.id]), (error) => error.code === "42501");
       await assert.rejects(db.query("insert into public.inquiry_notes(inquiry_id,body) values ($1,'denied')", [created.id]), (error) => error.code === "42501");
     });
     await denied(outsider);

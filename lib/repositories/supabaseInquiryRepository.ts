@@ -179,36 +179,30 @@ export async function updateAdminInquiryAssignment(supabase: SupabaseClient<Data
   requireId(actorId);
   requireId(inquiryId);
   if (assignedTo !== null) requireId(assignedTo);
-  const current = await supabase.from("inquiries").select("assignee_id").eq("id", inquiryId).is("deleted_at", null).maybeSingle();
-  if (current.error || !current.data) throw new Error("Inquiry not found or no longer available to your session.");
-  const before = current.data.assignee_id;
-  if (before === assignedTo) return;
-  let update = supabase.from("inquiries").update({ assignee_id: assignedTo }).eq("id", inquiryId).is("deleted_at", null);
-  update = before === null ? update.is("assignee_id", null) : update.eq("assignee_id", before);
-  const { data, error } = await update.select("id").maybeSingle();
-  if (error) throw new Error(inquiryError(error.code));
-  if (!data) throw new Error("Inquiry assignment changed. Refresh and try again.");
-  const audit = await createServiceClient().from("audit_logs").insert({
-    actor_id: actorId,
-    action: assignedTo === null ? "inquiry_unassigned" : "inquiry_assigned",
-    entity_table: "inquiries",
-    entity_id: inquiryId,
-    changes: { before: { assignee_id: before }, after: { assignee_id: assignedTo } },
+  const { data, error } = await supabase.rpc("change_inquiry_assignment", {
+    p_id: inquiryId, p_assignee_id: assignedTo, p_admin_url: assignedTo === null ? null : inquiryAdminUrl(inquiryId),
   });
-  if (audit.error) throw new Error("Unable to confirm the assignment audit. Refresh before retrying.");
+  if (error) throw new Error(inquiryError(error.code));
+  if (!data) throw new Error("Inquiry not found or no longer available to your session.");
 }
 
-/** Existing status callers may also supply an assignee; the inquiry portal's
- * assignment action uses updateAdminInquiryAssignment for audited changes. */
+function inquiryAdminUrl(id: string): string {
+  const url = new URL(process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000");
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error("Invalid site URL.");
+  return `${url.origin}/admin/inquiries?inquiry=${id}`;
+}
+
+/** The RPC owns the inquiry mutation, assignment audit and outbox inserts. */
 export async function updateAdminInquiryStatus(supabase: SupabaseClient<Database>, id: string, status?: InquiryStatus, assigneeId?: string | null): Promise<Tables<"inquiries">> {
   requireId(id);
   if (status !== undefined && !inquiryStatuses.includes(status)) throw new Error("Choose a valid inquiry status.");
   if (assigneeId !== undefined && assigneeId !== null) requireId(assigneeId);
   if (status === undefined && assigneeId === undefined) throw new Error("Choose a status or assignee to update.");
-  const changes: Database["public"]["Tables"]["inquiries"]["Update"] = {};
-  if (status !== undefined) changes.status = status;
-  if (assigneeId !== undefined) changes.assignee_id = assigneeId;
-  const { data, error } = await supabase.from("inquiries").update(changes).eq("id", id).is("deleted_at", null).select("*").maybeSingle();
+  const { data, error } = await supabase.rpc("change_inquiry_status", {
+    p_id: id, p_status: status ?? null, p_assignee_id: assigneeId ?? null,
+    p_change_assignee: assigneeId !== undefined,
+    p_admin_url: assigneeId ? inquiryAdminUrl(id) : null,
+  });
   if (error) throw new Error(inquiryError(error.code));
   if (!data) throw new Error("Inquiry not found or no longer available to your session.");
   return data;

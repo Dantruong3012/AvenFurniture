@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
@@ -20,7 +21,7 @@ test("MVP migration and RLS on isolated PostgreSQL", async (t) => {
     create role authenticated nologin;
     create role service_role nologin bypassrls;
     create schema auth;
-    create table auth.users(id uuid primary key);
+    create table auth.users(id uuid primary key, email text);
     create table auth.sessions(id uuid primary key, user_id uuid not null references auth.users(id),
       created_at timestamptz not null default now(), not_after timestamptz);
     create function auth.jwt() returns jsonb language sql stable as
@@ -39,7 +40,7 @@ test("MVP migration and RLS on isolated PostgreSQL", async (t) => {
   await db.exec("commit");
   const sessionIds = Object.fromEntries(Object.entries(ids).map(([name, id]) => [name, id.replace("00000000-", "10000000-")]));
   for (const [name, id] of Object.entries(ids)) {
-    await db.query("insert into auth.users values ($1)", [id]);
+    await db.query("insert into auth.users values ($1,$2)", [id, `${name}@example.com`]);
     await db.query("insert into auth.sessions(id,user_id) values ($1,$2)", [sessionIds[name], id]);
   }
   await db.query(`insert into public.admin_profiles(user_id, display_name, role, active) values
@@ -55,6 +56,8 @@ test("MVP migration and RLS on isolated PostgreSQL", async (t) => {
   const draft = (await db.query(`insert into public.products(category_id,name,slug) values ($1,'Draft','draft') returning id`, [category])).rows[0].id;
   const inquiry = (await db.query(`insert into public.inquiries(idempotency_key,contact_name,contact_phone,original_submission,source)
     values (gen_random_uuid(),'Customer','0901234567','{"name":"Customer"}','contact') returning id`)).rows[0].id;
+  const changeInquiry = (await db.query(`insert into public.inquiries(idempotency_key,contact_name,contact_phone,contact_email,original_submission,source)
+    values (gen_random_uuid(),'Email Customer','0901234567','customer@example.com','{}','contact') returning id`)).rows[0].id;
   await db.query(`insert into public.inquiry_items(inquiry_id,product_id,product_name,product_slug,currency,quantity)
     values ($1,$2,'Chair','chair','USD',1)`, [inquiry, published]);
   await db.query(`insert into public.consultant_profiles(user_id,public_name,zalo_phone,enabled)
@@ -99,7 +102,8 @@ test("MVP migration and RLS on isolated PostgreSQL", async (t) => {
   await t.test("staff can edit others' products/inquiries, but cannot elevate roles/manage categories", () => as("authenticated", ids.staff, async () => {
     assert.equal((await db.query("select * from public.products")).rows.length, 2);
     assert.equal((await db.query("update public.products set name='Updated' where id=$1 returning version", [draft])).rows[0].version, 2);
-    assert.equal((await db.query("update public.inquiries set status='consulting',contact_name='Corrected' where id=$1 returning id", [inquiry])).rows.length, 1);
+    await rejects("update public.inquiries set status='consulting' where id=$1", [inquiry]);
+    assert.equal((await db.query("update public.inquiries set contact_name='Corrected' where id=$1 returning id", [inquiry])).rows.length, 1);
     assert.equal((await db.query("update public.admin_profiles set role='super_admin' where user_id=$1 returning user_id", [ids.staff])).rows.length, 0);
     assert.equal((await db.query("update public.categories set name='Hacked' returning id")).rows.length, 0);
     assert.equal((await db.query("update public.consultant_profiles set enabled=false returning user_id")).rows.length, 0);
@@ -113,6 +117,43 @@ test("MVP migration and RLS on isolated PostgreSQL", async (t) => {
     assert.equal((await db.query("insert into public.inquiry_notes(inquiry_id,body) values ($1,'Follow up') returning id", [inquiry])).rows.length, 1);
     assert.equal((await db.query("select * from public.audit_logs")).rows.length, 0);
   }));
+  await t.test("change RPCs atomically queue unique events and audit assignment", async () => {
+    const rows = () => db.query("select event_type,payload,idempotency_key,event_id from public.email_outbox where inquiry_id=$1 order by created_at,id", [changeInquiry]);
+    await as("authenticated", ids.staff, async () => {
+      await db.query("select public.change_inquiry_status($1,'consulting')", [changeInquiry]);
+      await db.query("select public.change_inquiry_status($1,'consulting')", [changeInquiry]);
+      await db.query("select public.change_inquiry_assignment($1,$2,$3)", [changeInquiry, ids.staff, `http://localhost:3000/admin/inquiries?inquiry=${changeInquiry}`]);
+      await db.query("select public.change_inquiry_assignment($1,$2,$3)", [changeInquiry, ids.staff, `http://localhost:3000/admin/inquiries?inquiry=${changeInquiry}`]);
+    });
+    const events = (await rows()).rows;
+    assert.deepEqual(events.map((event) => event.event_type).sort(), ["inquiry.assigned", "inquiry.status_changed"]);
+    assert.equal(new Set(events.map((event) => event.idempotency_key)).size, 2);
+    for (const event of events) {
+      assert.equal(event.idempotency_key,
+        createHash("sha256").update(`email:v1\0${event.event_type}\0${event.event_id}`).digest("hex"));
+    }
+    assert.equal(events.find((event) => event.event_type === "inquiry.assigned").payload.data.to, "staff@example.com");
+    assert.equal(events.find((event) => event.event_type === "inquiry.status_changed").payload.data.status, "consulting");
+    const audits = (await db.query("select action,actor_id from public.audit_logs where entity_id=$1", [changeInquiry])).rows;
+    assert.deepEqual(audits, [{ action: "inquiry_assigned", actor_id: ids.staff }]);
+    await db.exec(`create function public.fail_change_outbox() returns trigger language plpgsql as $$ begin raise exception 'outbox failed'; end $$;
+      create trigger fail_change_outbox before insert on public.email_outbox for each row execute function public.fail_change_outbox();`);
+    try {
+      await assert.rejects(as("authenticated", ids.staff, () => db.query("select public.change_inquiry_status($1,'completed')", [changeInquiry])), /outbox failed/);
+      assert.equal((await db.query("select status from public.inquiries where id=$1", [changeInquiry])).rows[0].status, "consulting");
+      assert.equal((await rows()).rows.length, 2);
+    } finally { await db.exec("drop trigger fail_change_outbox on public.email_outbox; drop function public.fail_change_outbox()"); }
+    await as("authenticated", ids.staff, () => db.query("select public.change_inquiry_assignment($1,null,null)", [changeInquiry]));
+    const auditCount = (await db.query("select count(*)::int count from public.audit_logs where entity_id=$1", [changeInquiry])).rows[0].count;
+    await db.exec(`create function public.fail_assignment_outbox() returns trigger language plpgsql as $$ begin raise exception 'assignment outbox failed'; end $$;
+      create trigger fail_assignment_outbox before insert on public.email_outbox for each row execute function public.fail_assignment_outbox();`);
+    try {
+      await assert.rejects(as("authenticated", ids.staff, () => db.query("select public.change_inquiry_assignment($1,$2,$3)",
+        [changeInquiry, ids.staff, `http://localhost:3000/admin/inquiries?inquiry=${changeInquiry}`])), /assignment outbox failed/);
+      assert.equal((await db.query("select assignee_id from public.inquiries where id=$1", [changeInquiry])).rows[0].assignee_id, null);
+      assert.equal((await db.query("select count(*)::int count from public.audit_logs where entity_id=$1", [changeInquiry])).rows[0].count, auditCount);
+    } finally { await db.exec("drop trigger fail_assignment_outbox on public.email_outbox; drop function public.fail_assignment_outbox()"); }
+  });
   await t.test("account lock invalidates staff access for the same JWT subject", async () => {
     await db.query("update public.admin_profiles set active=false where user_id=$1", [ids.staff]);
     await as("authenticated", ids.staff, async () => {

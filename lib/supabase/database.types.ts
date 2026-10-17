@@ -153,12 +153,16 @@ export type Database = {
           attempts: number
           created_at: string
           event_id: string
+          event_type: string | null
           id: string
+          idempotency_key: string | null
           inquiry_id: string
           last_error: string | null
           locked_until: string | null
           next_attempt_at: string
+          payload: Json | null
           provider_message_id: string | null
+          schema_version: number | null
           status: string
           updated_at: string
         }
@@ -166,12 +170,16 @@ export type Database = {
           attempts?: number
           created_at?: string
           event_id?: string
+          event_type?: string | null
           id?: string
+          idempotency_key?: string | null
           inquiry_id: string
           last_error?: string | null
           locked_until?: string | null
           next_attempt_at?: string
+          payload?: Json | null
           provider_message_id?: string | null
+          schema_version?: number | null
           status?: string
           updated_at?: string
         }
@@ -179,12 +187,16 @@ export type Database = {
           attempts?: number
           created_at?: string
           event_id?: string
+          event_type?: string | null
           id?: string
+          idempotency_key?: string | null
           inquiry_id?: string
           last_error?: string | null
           locked_until?: string | null
           next_attempt_at?: string
+          payload?: Json | null
           provider_message_id?: string | null
+          schema_version?: number | null
           status?: string
           updated_at?: string
         }
@@ -535,6 +547,14 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      change_inquiry_assignment: {
+        Args: { p_id: string; p_assignee_id: string | null; p_admin_url: string | null }
+        Returns: Database["public"]["Tables"]["inquiries"]["Row"]
+      }
+      change_inquiry_status: {
+        Args: { p_id: string; p_status: string | null; p_assignee_id?: string | null; p_change_assignee?: boolean; p_admin_url?: string | null }
+        Returns: Database["public"]["Tables"]["inquiries"]["Row"]
+      }
       submit_customer_inquiry: {
         Args: {
           p_idempotency_key: string

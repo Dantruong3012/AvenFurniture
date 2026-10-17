@@ -144,16 +144,11 @@ function inquiryRepositoryFixture({ initialAssignee = null, inactive = false, au
       if (parsed.pathname.endsWith("/admin_profiles")) {
         return json(inactive ? [] : [{ user_id: otherId, display_name: "Active staff" }]);
       }
-      if (parsed.pathname.endsWith("/audit_logs")) {
-        return auditFails ? json({ message: "private audit error" }, 403) : new Response(null, { status: 201 });
-      }
-      if (parsed.pathname.endsWith("/inquiries") && init.method === "PATCH") {
-        if (conflict) return json([]);
-        assignee = body.assignee_id;
-        return json([{ id }]);
-      }
-      if (parsed.pathname.endsWith("/inquiries") && parsed.searchParams.get("select") === "assignee_id") {
-        return json([{ assignee_id: assignee }]);
+      if (parsed.pathname.endsWith("/rpc/change_inquiry_assignment")) {
+        if (auditFails) return json({ code: "23514", message: "private audit error" }, 400);
+        if (conflict) return json(null);
+        assignee = body.p_assignee_id;
+        return json({ ...detail, assignee_id: assignee });
       }
       if (parsed.pathname.endsWith("/inquiries")) {
         return json([{ ...detail, assignee_id: assignee }]);
@@ -187,35 +182,32 @@ test("repository offers active staff only after an authenticated inquiry read", 
   assert.deepEqual(await inactive.listActiveInquiryStaff(), []);
 });
 
-test("repository assigns and unassigns with an authenticated update and an actor-bound audit event", async () => {
+test("repository assigns and unassigns through an authenticated atomic RPC", async () => {
   const fixture = inquiryRepositoryFixture();
   assert.equal(await fixture.isActiveInquiryStaff(otherId), true);
   await fixture.updateAdminInquiryAssignment(fixture.authenticated, id, id, otherId);
   assert.equal(fixture.getAssignee(), otherId);
   await fixture.updateAdminInquiryAssignment(fixture.authenticated, id, id, null);
   assert.equal(fixture.getAssignee(), null);
-  const updates = fixture.requests.filter((request) => request.method === "PATCH");
-  assert.deepEqual(updates.map((request) => request.body), [{ assignee_id: otherId }, { assignee_id: null }]);
-  assert.ok(updates.every((request) => request.kind === "authenticated"));
-  assert.equal(updates[0].url.searchParams.get("assignee_id"), "is.null");
-  assert.equal(updates[1].url.searchParams.get("assignee_id"), `eq.${otherId}`);
-  const audits = fixture.requests.filter((request) => request.url.pathname.endsWith("/audit_logs"));
-  assert.deepEqual(audits.map((request) => request.body), [
-    { actor_id: id, action: "inquiry_assigned", entity_table: "inquiries", entity_id: id, changes: { before: { assignee_id: null }, after: { assignee_id: otherId } } },
-    { actor_id: id, action: "inquiry_unassigned", entity_table: "inquiries", entity_id: id, changes: { before: { assignee_id: otherId }, after: { assignee_id: null } } },
+  const updates = fixture.requests.filter((request) => request.url.pathname.endsWith("/rpc/change_inquiry_assignment"));
+  assert.deepEqual(updates.map((request) => request.body), [
+    { p_id: id, p_assignee_id: otherId, p_admin_url: `http://localhost:3000/admin/inquiries?inquiry=${id}` },
+    { p_id: id, p_assignee_id: null, p_admin_url: null },
   ]);
-  assert.ok(audits.every((request) => request.kind === "service"));
+  assert.ok(updates.every((request) => request.kind === "authenticated"));
+  assert.equal(fixture.requests.some((request) => request.url.pathname.endsWith("/audit_logs")), false);
+  assert.equal(fixture.requests.some((request) => request.method === "PATCH"), false);
 });
 
-test("repository skips unchanged assignments and rejects conflicts or audit failures", async () => {
+test("repository surfaces missing assignments and transaction failures without extra writes", async () => {
   const unchanged = inquiryRepositoryFixture({ initialAssignee: otherId });
   await unchanged.updateAdminInquiryAssignment(unchanged.authenticated, id, id, otherId);
   assert.equal(unchanged.requests.length, 1);
   const conflict = inquiryRepositoryFixture({ conflict: true });
-  await assert.rejects(conflict.updateAdminInquiryAssignment(conflict.authenticated, id, id, otherId), /changed/);
+  await assert.rejects(conflict.updateAdminInquiryAssignment(conflict.authenticated, id, id, otherId), /not found/);
   assert.equal(conflict.requests.some((request) => request.url.pathname.endsWith("/audit_logs")), false);
   const auditFailure = inquiryRepositoryFixture({ auditFails: true });
-  await assert.rejects(auditFailure.updateAdminInquiryAssignment(auditFailure.authenticated, id, id, otherId), /audit/);
+  await assert.rejects(auditFailure.updateAdminInquiryAssignment(auditFailure.authenticated, id, id, otherId), /session or permissions|inquiry/);
 });
 
 // Render actual TSX locally with stubbed framework boundaries; no HTTP or live data.

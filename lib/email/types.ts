@@ -40,9 +40,7 @@ export type EmailOutboxEvent = { [K in EmailEventType]: {
 
 /** Implement this inside the same database transaction as the domain change.
  * The store must enforce UNIQUE(idempotency_key) and atomically insert or read
- * the existing row. A pre-insert lookup is not sufficient for concurrent calls.
- * The current email_outbox table lacks these columns; this is the contract for
- * a future transactional adapter, not a claim that it already persists them. */
+ * the existing row. A pre-insert lookup is insufficient for concurrent calls. */
 export interface EmailEventTransaction {
   insertOrGet(draft: EmailEventDraft & { idempotency_key: string }): Promise<EmailOutboxEvent>;
 }

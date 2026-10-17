@@ -6,7 +6,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { createClient } from "@supabase/supabase-js";
 import { loadModule } from "./helpers/load-module.mjs";
 
-const { calculateRetryDelay, createSupabaseOutboxStore, dispatchOutboxBatch, dispatchScopedOutboxRetry, emailEventIdempotencyKey, enqueueEmailEvent, getOutboxHealthSummary, inspectOutboxHealth, runOutboxWorker, validateEmailEventDraft } = loadModule("lib/email/outbox.ts", { "server-only": {} });
+const { buildInquiryChangeMessage, calculateRetryDelay, createSupabaseOutboxStore, dispatchOutboxBatch, dispatchScopedOutboxRetry, emailEventIdempotencyKey, enqueueEmailEvent, getOutboxHealthSummary, inspectOutboxHealth, runOutboxWorker, validateEmailEventDraft } = loadModule("lib/email/outbox.ts", { "server-only": {} });
 const { createMockMailer, createDeferredMailer, createStagingMailer, createConsoleMailer } = loadModule("lib/email/mailer.ts", { "server-only": {} });
 const message = { to: "customer@example.com", subject: "Inquiry received", text: "Thank you", html: "<p>Thank you</p>" };
 const delivery = (idempotencyKey = randomUUID()) => ({ idempotencyKey, signal: new AbortController().signal });
@@ -142,9 +142,10 @@ async function database(t) {
   const ddl = migration.match(/create table public\.email_outbox \([\s\S]*?\n\);/)[0];
   await db.exec("create table public.inquiries (id uuid primary key)");
   await db.exec(ddl);
+  await db.exec("alter table public.email_outbox add column event_type text, add column payload jsonb, add column idempotency_key text, add column schema_version integer");
   const parent = randomUUID();
   await db.query("insert into inquiries values ($1)", [parent]);
-  const columns = new Set(["id", "event_id", "inquiry_id", "status", "attempts", "next_attempt_at", "locked_until", "provider_message_id", "last_error", "created_at", "updated_at"]);
+  const columns = new Set(["id", "event_id", "inquiry_id", "status", "attempts", "next_attempt_at", "locked_until", "provider_message_id", "last_error", "created_at", "updated_at", "event_type", "payload", "idempotency_key", "schema_version"]);
   const column = (name) => { assert.ok(columns.has(name), `Unexpected column ${name}`); return name; };
   const requests = [];
   const client = () => createClient("https://outbox-test.invalid", "test-key", {
@@ -489,6 +490,41 @@ test("outbox worker renders typed template payloads before delivery", async (t) 
   assert.equal(mailer.deliveries.length, 1);
   assert.match(mailer.deliveries[0].message.text, /Hello Ari/);
   assert.match(mailer.deliveries[0].message.html, /Oak table/);
+});
+
+test("persisted inquiry change events render for mock delivery and remain pending when deferred", async (t) => {
+  const fixture = await database(t);
+  const eventId = randomUUID();
+  const row = await fixture.insert({ event_id: eventId });
+  const payload = { inquiryId: row.inquiry_id, template: "status_update", data: {
+    to: "customer@example.com", recipient: "customer", inquiryId: row.inquiry_id,
+    customerName: "Ari", status: "completed", previousStatus: "consulting" } };
+  const key = emailEventIdempotencyKey("inquiry.status_changed", eventId);
+  await fixture.db.query("update email_outbox set event_type=$2,payload=$3::jsonb,idempotency_key=$4,schema_version=1 where id=$1",
+    [row.id, "inquiry.status_changed", JSON.stringify(payload), key]);
+  const store = fixture.store();
+  const deferred = createDeferredMailer();
+  const options = { store, buildMessage: async (event) => buildInquiryChangeMessage(event), now: () => epoch, random: () => 0 };
+  assert.deepEqual(await dispatchOutboxBatch({ ...options, mailer: deferred }), [{ id: row.id, status: "retry" }]);
+  assert.equal((await fixture.get(row.id)).status, "pending");
+  assert.equal(deferred.deferrals[0].idempotencyKey, key);
+  const mock = createMockMailer();
+  assert.deepEqual(await dispatchOutboxBatch({ ...options, mailer: mock, now: () => epoch + 1000 }), [{ id: row.id, status: "sent" }]);
+  assert.equal((await fixture.get(row.id)).status, "sent");
+  assert.equal(mock.deliveries.length, 1);
+  assert.equal(mock.deliveries[0].idempotencyKey, key);
+  assert.deepEqual(await dispatchOutboxBatch({ ...options, mailer: mock, now: () => epoch + 2000 }), []);
+  assert.equal(mock.deliveries.length, 1);
+  const assignmentId = randomUUID();
+  const assignment = await fixture.insert({ event_id: assignmentId });
+  const assignmentKey = emailEventIdempotencyKey("inquiry.assigned", assignmentId);
+  await fixture.db.query("update email_outbox set event_type=$2,payload=$3::jsonb,idempotency_key=$4,schema_version=1 where id=$1",
+    [assignment.id, "inquiry.assigned", JSON.stringify({ inquiryId: assignment.inquiry_id, template: "consultant_assignment", data: {
+      to: "staff@example.com", inquiryId: assignment.inquiry_id, customerName: "Ari", adminUrl: "https://example.test/admin/inquiries" } }), assignmentKey]);
+  assert.deepEqual(await dispatchOutboxBatch({ ...options, mailer: mock, now: () => epoch + 2000 }), [{ id: assignment.id, status: "sent" }]);
+  assert.equal((await fixture.get(assignment.id)).status, "sent");
+  assert.equal(mock.deliveries[1].idempotencyKey, assignmentKey);
+  assert.match(mock.deliveries[1].message.text, /assigned to you/);
 });
 
 test("database errors are sanitized for listing, claiming and saving", async () => {
