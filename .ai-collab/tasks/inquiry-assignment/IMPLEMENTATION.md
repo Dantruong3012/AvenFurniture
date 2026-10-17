@@ -3,7 +3,7 @@
 Status: READY_FOR_REVIEW
 Changed paths: components/admin/inquiry-portal.tsx, lib/inquiries/actions.ts, lib/repositories/supabaseInquiryRepository.ts, lib/validation/inquiry.ts, tests/admin-inquiry.test.mjs
 Commit: feat(inquiry-assignment): implement approved task
-Commit hash: -
+Commit hash: 11fbc234bfd797701ef0efb349e24aa932452425
 
 Implemented inquiry assignment and unassignment for active staff, with server validation and audit events.
 

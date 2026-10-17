@@ -17,7 +17,7 @@ Only Antigravity adds tasks from a roadmap approved by the user. Each task also 
 | release-m6-production-tracking | P1 | release-m5-controlled-merge | Codex | DONE | APPROVED | Vercel Production deployment observer matching merged commit SHA with error boundary | 630795f7e0c2ee08ea9511562d26654a0f18b99f |
 | storefront-customer-portal | P2 | inquiry-service-layer | Codex | DONE | APPROVED | Customer order inquiry lookup portal, verification by phone or email and order history view | 3b6a856d7d0403886ce0e0acc426b24a5ee9840d |
 | email-notification-templates | P1 | email-outbox-dispatch | Codex | DONE | APPROVED | Email templates for customer confirmation, consultant assignment and status changes via outbox worker | 4692ce6fadc881bad871abda8fa100cdc23fa94d |
-| inquiry-assignment | P0 | admin-inquiry-portal | Codex | APPROVED | APPROVED | Assign or unassign active staff in inquiry UI with server validation and audit | - |
+| inquiry-assignment | P0 | admin-inquiry-portal | Codex | DONE | APPROVED | Assign or unassign active staff in inquiry UI with server validation and audit | 11fbc234bfd797701ef0efb349e24aa932452425 |
 | outbox-operations | P1 | email-outbox-dispatch | Codex | BACKLOG | APPROVED | Show outbox health and permit scoped retry through existing worker without sending live mail in tests | - |
 | staff-auth-policy | P0 | - | Antigravity | BACKLOG | NEEDS_DECISION | Approve invite, role, disable and deletion policy including Auth session handling and RLS | - |
 | staff-invite | P1 | staff-auth-policy | Codex | BACKLOG | NEEDS_DECISION | Super admin invites staff with retry safe Auth and profile lifecycle | - |
