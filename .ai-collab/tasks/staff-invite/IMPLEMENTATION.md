@@ -3,7 +3,7 @@
 Status: READY_FOR_REVIEW
 Changed paths: lib/auth/admin.ts, lib/auth/actions.ts, lib/auth/validation.ts, components/admin/team-management.tsx, app/admin/(protected)/team/page.tsx, tests/staff-auth-policy.test.mjs, supabase/migrations/20261017210000_staff_invite_lifecycle.sql, lib/supabase/database.types.ts
 Commit: feat(staff-invite): implement approved task
-Commit hash: -
+Commit hash: 5d6293228c80e821ccac4b13900fbf8f4fc7fd1d
 
 Changed `existing` from `let` to `const` in the staff invite flow. No other source edits were needed in this rework round.
 
