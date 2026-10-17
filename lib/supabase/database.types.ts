@@ -19,6 +19,8 @@ export type Database = {
           active: boolean
           created_at: string
           display_name: string
+          invite_email: string | null
+          invited_at: string | null
           role: string
           sessions_revoked_before: string | null
           updated_at: string
@@ -28,6 +30,8 @@ export type Database = {
           active?: boolean
           created_at?: string
           display_name: string
+          invite_email?: string | null
+          invited_at?: string | null
           role: string
           sessions_revoked_before?: string | null
           updated_at?: string
@@ -37,6 +41,8 @@ export type Database = {
           active?: boolean
           created_at?: string
           display_name?: string
+          invite_email?: string | null
+          invited_at?: string | null
           role?: string
           sessions_revoked_before?: string | null
           updated_at?: string
@@ -786,6 +792,6 @@ export const Constants = {
   },
 } as const
 
-export type AdminRole = "super_admin" | "staff";
+export type AdminRole = "super_admin" | "admin" | "editor" | "staff";
 export type AdminProfile = Database["public"]["Tables"]["admin_profiles"]["Row"];
 export type ProductRow = Database["public"]["Tables"]["products"]["Row"];

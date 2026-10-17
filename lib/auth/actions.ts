@@ -6,11 +6,10 @@ import { allowAuthMutation } from "./mutation";
 import { readMfaState, sensitiveAuthAllowed } from "./mfa-policy";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { requireAdmin } from "./admin";
-import { requireStaffManager } from "./admin";
+import { inviteStaffMember, requireAdmin, requireStaffManager } from "./admin";
 import { revalidatePath } from "next/cache";
 import { readAdminSessionContext } from "./session";
-import { assignableStaffRole, recoveryType, staffRole, validEmail, validNewPassword, validStaffId, validStaffName } from "./validation";
+import { assignableStaffRole, parseStaffInvitation, recoveryType, staffRole, validEmail, validNewPassword, validStaffId } from "./validation";
 
 export type AuthState = { error?: string; message?: string };
 const field = (form: FormData, name: string) => String(form.get(name) ?? "");
@@ -126,24 +125,24 @@ export async function changePassword(_state: AuthState, form: FormData): Promise
 const teamError = { error: "Account change could not be completed. Check the account and try again." };
 
 export async function inviteStaff(form: FormData): Promise<AuthState> {
-  const { user, session } = await requireStaffManager();
-  const email = field(form, "email").trim().toLowerCase();
-  const name = field(form, "display_name").trim();
-  const role = assignableStaffRole(field(form, "role"), session.role);
-  if (!validEmail(email) || !validStaffName(name) || !role || role === "super_admin") return { error: "Enter a name, valid email, and admin or editor role." };
+  const { user, session } = await requireAdmin();
+  if (session.role !== "super_admin") return { error: "Only a super admin can invite team members." };
+  const invitation = parseStaffInvitation({ email: form.get("email"), display_name: form.get("display_name"), role: form.get("role") });
+  if (!invitation) return { error: "Enter a name, valid email, and allowed role." };
   if (!(await allowAuthMutation("staff-invite", user.id, 10))) return { error: "Too many invitations. Try again later." };
   const siteUrl = process.env.NEXT_PUBLIC_SITE_URL;
   if (!siteUrl) return { error: "Invitations are not configured yet." };
-  const { createServiceClient } = await import("@/lib/supabase/admin");
-  const service = createServiceClient();
-  const { data, error } = await service.auth.admin.inviteUserByEmail(email, {
-    data: { display_name: name }, redirectTo: new URL("/auth/confirm", siteUrl).toString(),
-  });
-  if (error || !data.user) return teamError;
-  const created = await service.from("admin_profiles").insert({ user_id: data.user.id, display_name: name, role, active: true });
-  if (created.error) return { error: "Invite was sent, but access could not be provisioned. Contact an administrator before retrying." };
+  let result: Awaited<ReturnType<typeof inviteStaffMember>>;
+  try { result = await inviteStaffMember(invitation, new URL("/auth/confirm", siteUrl).toString()); }
+  catch (error) { return { error: error instanceof Error ? error.message : teamError.error }; }
+  if (result === "disabled") return { error: "This account is disabled. Enable it from account details before inviting again." };
+  if (result === "already_active") return { message: "This person already has an active team account." };
   revalidatePath("/admin/team");
-  return { message: "Invitation sent." };
+  return { message: result === "resent" ? "Invitation resent." : "Invitation sent." };
+}
+
+export async function inviteStaffAction(form: FormData): Promise<AuthState> {
+  return inviteStaff(form);
 }
 
 async function managedTarget(id: string, managerRole: string) {

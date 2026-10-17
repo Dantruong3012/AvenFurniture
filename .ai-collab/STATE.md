@@ -1,7 +1,7 @@
 # Workflow state
 
-Active task: -
-Current phase: IDLE
+Active task: staff-invite
+Current phase: APPROVED
 Last completed task: staff-auth-policy
 Next task: staff-invite
 Blockers: -

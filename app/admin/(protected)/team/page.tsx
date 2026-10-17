@@ -1,4 +1,4 @@
-import { requireAdmin } from "@/lib/auth/admin";
+import { requireAdmin, teamInviteStatuses } from "@/lib/auth/admin";
 import { TeamManagement, type TeamMember } from "@/components/admin/team-management";
 import { redirect } from "next/navigation";
 
@@ -14,6 +14,11 @@ export default async function TeamPage() {
     if (error) throw new Error("Team accounts could not be loaded. Please retry.");
     members.push(...data);
     if (data.length < 1000) break;
+  }
+  const inviteStatuses = await teamInviteStatuses(members.map((member) => member.user_id));
+  for (const member of members) {
+    member.inviteStatus = inviteStatuses[member.user_id]?.status ?? "unavailable";
+    member.email = inviteStatuses[member.user_id]?.email;
   }
   return <TeamManagement members={members} managerId={user.id} managerRole={session.role} />;
 }
