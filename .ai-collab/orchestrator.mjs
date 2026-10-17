@@ -22,8 +22,8 @@ const runnerReviewPath = '.ai-collab/tasks/orchestrator-quota-recovery/REVIEW.md
 const runnerUpgradePaths = new Set(['.ai-collab/orchestrator.mjs', '.ai-collab/orchestrator-core.mjs', '.ai-collab/workflow.mjs', '.ai-collab/orchestrator.integration.test.mjs', '.ai-collab/orchestrator.test.mjs', '.ai-collab/README.md', '.ai-collab/tasks/orchestrator-quota-recovery/IMPLEMENTATION.md', runnerReviewPath, 'AGENTS.md']);
 const planRecoveryReviewPath = '.ai-collab/tasks/orchestrator-plan-path-recovery/REVIEW.md';
 const planRecoveryPaths = new Set(['.ai-collab/orchestrator.mjs', '.ai-collab/orchestrator-core.mjs', '.ai-collab/orchestrator.integration.test.mjs', '.ai-collab/orchestrator.test.mjs', '.ai-collab/README.md', '.ai-collab/tasks/orchestrator-plan-path-recovery/IMPLEMENTATION.md', planRecoveryReviewPath]);
-const replanReviewPath = '.ai-collab/tasks/orchestrator-replan-recovery/REVIEW.md';
-const replanRunnerPaths = new Set(['.ai-collab/orchestrator.mjs', '.ai-collab/orchestrator-core.mjs', '.ai-collab/orchestrator.integration.test.mjs', '.ai-collab/orchestrator.test.mjs', '.ai-collab/README.md', '.ai-collab/tasks/orchestrator-replan-recovery/IMPLEMENTATION.md', replanReviewPath]);
+const replanReviewPaths = new Set(['.ai-collab/tasks/orchestrator-replan-recovery/REVIEW.md', '.ai-collab/tasks/orchestrator-schema-replan-recovery/REVIEW.md']);
+const replanRunnerPaths = new Set(['.ai-collab/orchestrator.mjs', '.ai-collab/orchestrator-core.mjs', '.ai-collab/orchestrator.integration.test.mjs', '.ai-collab/orchestrator.test.mjs', '.ai-collab/README.md', '.ai-collab/tasks/orchestrator-replan-recovery/IMPLEMENTATION.md', '.ai-collab/tasks/orchestrator-replan-recovery/REVIEW.md', '.ai-collab/tasks/orchestrator-schema-replan-recovery/PLAN.md', '.ai-collab/tasks/orchestrator-schema-replan-recovery/IMPLEMENTATION.md', '.ai-collab/tasks/orchestrator-schema-replan-recovery/REVIEW.md']);
 const architectureReviewPath = '.ai-collab/tasks/orchestrator-architecture-recovery/REVIEW.md';
 const architectureRunnerPaths = new Set(['.ai-collab/orchestrator.mjs', '.ai-collab/orchestrator.integration.test.mjs', '.ai-collab/README.md', '.ai-collab/tasks/orchestrator-architecture-recovery/PLAN.md', '.ai-collab/tasks/orchestrator-architecture-recovery/IMPLEMENTATION.md', architectureReviewPath]);
 const architecturePlanReviewPath = '.ai-collab/tasks/orchestrator-architecture-plan-recovery/REVIEW.md';
@@ -191,7 +191,7 @@ function recoverPlanPath() {
   } finally { rmSync(lock, { recursive: true }); }
 }
 function planningContext(plan) {
-  const files = git('ls-files', '--', 'app', 'components', 'lib', 'tests').split('\n').filter(Boolean);
+  const files = git('ls-files', '--', 'app', 'components', 'lib', 'tests', 'supabase').split('\n').filter(Boolean);
   const index = files.join('\n');
   if (index.length > 16000) throw new Error('Planning file index exceeds bounded context; split the task');
   const referenced = [...new Set([...plan.matchAll(/`([A-Za-z0-9_./()[\]@-]+\.(?:tsx?|mjs|css))`/g)].map((match) => match[1]))]
@@ -211,7 +211,8 @@ function replan() {
     const id = checkpoint.task?.id;
     const data = backlog();
     const task = data.tasks.find((item) => item.id === id);
-    if (!id || checkpoint.status !== 'BLOCKED' || checkpoint.phase !== 'IN_PROGRESS' || !task || task.status !== 'BLOCKED' || !/^codex: .*exact path allowlist excludes/i.test(checkpoint.error ?? '')) throw new Error('Only the current blocked allowlist task can be replanned');
+    const isAllowlistBlocker = /^codex: .*(?:exact path allowlist excludes|cannot be implemented within the authorized files)/i.test(checkpoint.error ?? '');
+    if (!id || checkpoint.status !== 'BLOCKED' || checkpoint.phase !== 'IN_PROGRESS' || !task || task.status !== 'BLOCKED' || !isAllowlistBlocker) throw new Error('Only the current blocked allowlist task can be replanned');
     const state = read(join(workspace, 'STATE.md'));
     if (field(state, 'Active task') !== id || field(state, 'Current phase') !== 'BLOCKED') throw new Error('Workflow state does not match blocked checkpoint');
     if (field(data.content, 'Roadmap approval') !== 'APPROVED' || checkpoint.configDigest !== configDigest || checkpoint.scriptsDigest !== digest(requiredScripts())) throw new Error('Approved roadmap or runner configuration changed');
@@ -230,10 +231,11 @@ function replan() {
     const head = git('rev-parse', 'HEAD');
     if (git('merge-base', checkpoint.baseHead, head) !== checkpoint.baseHead) throw new Error('Checkpoint cannot adopt this Git history');
     const committed = git('diff', '--name-only', checkpoint.baseHead, head).split('\n').filter(Boolean);
-    if (!committed.length || committed.some((path) => !replanRunnerPaths.has(path)) || !committed.includes(replanReviewPath)) throw new Error('Replan requires a reviewed runner-only commit');
-    const review = git('show', `${head}:${replanReviewPath}`);
+    const reviewPath = [...replanReviewPaths].find((path) => committed.includes(path));
+    if (!committed.length || committed.some((path) => !replanRunnerPaths.has(path)) || !reviewPath) throw new Error('Replan requires a reviewed runner-only commit');
+    const review = git('show', `${head}:${reviewPath}`);
     if (field(review, 'Status') !== 'APPROVED' || !/^Reviewer: Antigravity\b/m.test(review)) throw new Error('Replan runner review is not APPROVED by Antigravity');
-    const metadata = new Set(['.ai-collab/BACKLOG.md', '.ai-collab/STATE.md', planPath, implPath]);
+    const metadata = new Set(['.ai-collab/BACKLOG.md', '.ai-collab/STATE.md', ...['PLAN.md', 'IMPLEMENTATION.md', 'REVIEW.md', 'IMPLEMENTATION_BRIEF.md', 'IMPLEMENTATION_SUMMARY.md', 'VERIFY_REPORT.md', 'REWORK.md'].map((name) => `.ai-collab/tasks/${id}/${name}`)]);
     if (changedWorkingPaths().some((path) => !metadata.has(path))) throw new Error('Uncommitted changes outside blocked task metadata');
     const current = snapshot(root);
     if (current[planPath] === checkpoint.baseline?.[planPath]) throw new Error('Task plan has not changed since checkpoint');
@@ -725,7 +727,8 @@ async function taskLoop() {
       const prior = existsSync(taskPath(checkpoint.task.id, 'PLAN.md')) ? read(taskPath(checkpoint.task.id, 'PLAN.md')) : '';
       if (checkpoint.approvedArchitecturePlanDigest && digest(prior) !== checkpoint.approvedArchitecturePlanDigest) throw new Error('Reviewed architecture plan changed before Planning');
       const architectureNote = checkpoint.approvedArchitecturePlanDigest ? 'This is a reviewed inquiry-status architecture recovery. Keep exactly the approved existing statuses new, consulting, completed, cancelled; include all four in details and do not propose in_progress, resolved, or archived. Keep the approved exact source paths.' : '';
-      const receipt = await agent('antigravity', 'plan', `Plan task ${checkpoint.task.id}. Approved acceptance criteria: ${checkpoint.task.criteria}. Existing task plan: ${prior || '(none)'}. ${architectureNote} ${planningContext(prior)} Return READY only if feasible without Production actions; otherwise BLOCKED. Use the supplied real repository file index: identify existing integration files, new modules, and test files by exact path. Do not assume a src/ directory or invent component names; do not use wildcards. The paths JSON array is the exact source ownership allowlist for Codex: include only application source, tests, and local migration files that Codex may edit. Never include any .ai-collab/ path, including PLAN.md, IMPLEMENTATION.md, REVIEW.md, BACKLOG.md or STATE.md. The coordinator writes lifecycle artifacts separately from paths. If the existing plan assigns IMPLEMENTATION.md to Codex, treat that as lifecycle evidence owned by the coordinator, not a source path. Return the complete implementation plan with acceptance criteria in details. Do not edit files. Do not expand scope or remove existing blockers.`, ['READY']);
+      const replanNote = checkpoint.approvedReplanPaths ? `This is a reviewed replan recovery. Return exactly these approved owned paths in paths: ${checkpoint.approvedReplanPaths.join(', ')}.` : '';
+      const receipt = await agent('antigravity', 'plan', `Plan task ${checkpoint.task.id}. Approved acceptance criteria: ${checkpoint.task.criteria}. Existing task plan: ${prior || '(none)'}. ${architectureNote} ${replanNote} ${planningContext(prior)} Return READY only if feasible without Production actions; otherwise BLOCKED. Use the supplied real repository file index: identify existing integration files, new modules, and test files by exact path. Do not assume a src/ directory or invent component names; do not use wildcards. The paths JSON array is the exact source ownership allowlist for Codex: include only application source, tests, and local migration files that Codex may edit. Never include any .ai-collab/ path, including PLAN.md, IMPLEMENTATION.md, REVIEW.md, BACKLOG.md or STATE.md. The coordinator writes lifecycle artifacts separately from paths. If the existing plan assigns IMPLEMENTATION.md to Codex, treat that as lifecycle evidence owned by the coordinator, not a source path. Return the complete implementation plan with acceptance criteria in details. Do not edit files. Do not expand scope or remove existing blockers.`, ['READY']);
       const plannedPaths = validatePaths(receipt.result.paths);
       if (checkpoint.approvedReplanPaths && (plannedPaths.length !== checkpoint.approvedReplanPaths.length || plannedPaths.some((path) => !checkpoint.approvedReplanPaths.includes(path)))) throw new Error('Antigravity Planning paths differ from the approved revised plan');
       if (checkpoint.approvedArchitecturePlanDigest && !hasApprovedInquiryStatuses(receipt.result.details)) throw new Error(architecturePlanningError);

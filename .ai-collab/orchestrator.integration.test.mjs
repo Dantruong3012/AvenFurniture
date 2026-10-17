@@ -567,6 +567,21 @@ test('fresh Planning cannot expand or replace approved replan ownership',async()
   assert.equal(events(dir).filter(e=>e.phase==='DONE').length,0);
  }finally{rmSync(dir,{recursive:true});}
 });
+test('replan supports schema and authorized files blocker via orchestrator-schema-replan-recovery',async()=>{
+ const dir=await blockedReplanFixture();try{
+  const cp=checkpoint(dir);
+  cp.error='codex: Transactional inquiry change events cannot be implemented within the authorized files and existing database schema.';
+  writeFileSync(join(dir,'.ai-collab/.runtime/checkpoint.json'),JSON.stringify(cp));
+  writeFileSync(join(dir,'.ai-collab/tasks/t1/IMPLEMENTATION.md'),`# Implementation: t1\n\nStatus: BLOCKED\n\n${cp.error}\n\nSee local checkpoint and logs; preserve all working changes.\n`);
+  revisedFixturePlan(dir);
+  const review=join(dir,'.ai-collab/tasks/orchestrator-schema-replan-recovery/REVIEW.md');mkdirSync(dirname(review),{recursive:true});
+  writeFileSync(review,'# Review: orchestrator-schema-replan-recovery\n\nStatus: APPROVED\nReviewer: Antigravity\n\nReviewed schema replan.\n');
+  gitCall(dir,'add','.ai-collab/orchestrator.mjs','.ai-collab/tasks/orchestrator-schema-replan-recovery/REVIEW.md');
+  gitCall(dir,'commit','-qm','fix(orchestrator): reviewed schema replan runner');
+  const recovered=await run(dir,'replan');assert.equal(recovered.code,0,recovered.output);
+  assert.equal(checkpoint(dir).phase,'PLANNING');assert.equal(checkpoint(dir).status,'RUNNING');
+ }finally{rmSync(dir,{recursive:true});}
+});
 
 const consultantPaths = ['components/layout/header.tsx', 'components/admin/catalog-shell.tsx', 'app/consultants/page.tsx', 'app/admin/(protected)/consultants/page.tsx', 'components/consultant/consultant-card.tsx', 'components/consultant/consultant-grid.tsx', 'components/consultant/zalo-contact-button.tsx', 'components/admin/consultant-form.tsx', 'components/admin/consultant-management.tsx', 'lib/consultants/actions.ts', 'lib/consultants/queries.ts', 'lib/repositories/supabaseConsultantRepository.ts', 'lib/validation/consultant.ts', 'tests/admin-consultant.test.mjs', 'tests/consultant.test.mjs'];
 async function stoppedConsultantFixture(reason = 'valid') {
