@@ -3,7 +3,7 @@
 Status: READY_FOR_REVIEW
 Changed paths: supabase/migrations/20261017180000_newsletter_data_policy.sql, lib/supabase/database.types.ts, lib/newsletter/types.ts, lib/newsletter/policy.ts, lib/newsletter/actions.ts, tests/newsletter-policy.test.mjs, tests/database.test.mjs
 Commit: feat(newsletter-data-policy): implement approved task
-Commit hash: -
+Commit hash: a85851084dee568971ea324c80915c62c57c5fc5
 
 Implemented the newsletter data policy and strengthened its verification.
 
