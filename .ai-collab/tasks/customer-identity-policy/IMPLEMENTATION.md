@@ -3,7 +3,7 @@
 Status: READY_FOR_REVIEW
 Changed paths: supabase/migrations/20261017230000_customer_identity_policy.sql, lib/auth/customer-policy.ts, lib/types.ts, tests/customer-identity-policy.test.mjs, lib/inquiries/actions.ts, lib/repositories/supabaseInquiryRepository.ts, components/portal/customer-portal.tsx, app/portal/page.tsx, tests/storefront-inquiry.test.mjs, tests/database.test.mjs
 Commit: feat(customer-identity-policy): implement approved task
-Commit hash: -
+Commit hash: 2ca46620f4a6ff78eb6e18b41afcd2c0b20496f6
 
 Implemented customer identity and privacy policy for inquiries and wishlists. The portal now shows only inquiries explicitly linked to the signed-in user; public contact lookup has been removed.
 
