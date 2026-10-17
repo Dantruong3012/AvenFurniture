@@ -1,7 +1,7 @@
 # Workflow state
 
-Active task: -
-Current phase: IDLE
+Active task: newsletter-data-policy
+Current phase: APPROVED
 Last completed task: email-change-events
 Next task: newsletter-data-policy
 Blockers: -

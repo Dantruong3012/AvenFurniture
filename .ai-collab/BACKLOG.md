@@ -27,7 +27,7 @@ Only Antigravity adds tasks from a roadmap approved by the user. Each task also 
 | staff-invite | P1 | staff-auth-policy | Codex | BACKLOG | NEEDS_DECISION | Super admin invites staff with retry safe Auth and profile lifecycle | - |
 | staff-role-status | P1 | staff-auth-policy | Codex | BACKLOG | NEEDS_DECISION | Super admin updates role and active status with last admin and session safeguards | - |
 | staff-delete | P2 | staff-auth-policy | Codex | BACKLOG | NEEDS_DECISION | Approved removal policy preserves inquiry and audit history | - |
-| newsletter-data-policy | P1 | - | Antigravity | READY | APPROVED | Approve newsletter subscriber schema, opt-in consent, retention, tokenized unsubscribe, and RLS policy | - |
+| newsletter-data-policy | P1 | - | Antigravity | APPROVED | APPROVED | Approve newsletter subscriber schema, opt-in consent, retention, tokenized unsubscribe, and RLS policy | - |
 | newsletter-subscribe | P1 | newsletter-data-policy | Codex | BACKLOG | APPROVED | Storefront newsletter subscription with email validation, rate limiting, duplicate prevention and opt-in audit | - |
 | newsletter-unsubscribe | P1 | newsletter-subscribe | Codex | BACKLOG | APPROVED | Signed token unsubscribe route revoking subscriber consent safely without leaking list data | - |
 | journal-content-policy | P1 | - | Antigravity | DONE | APPROVED | Approve article copy, publication source, editorial ownership, static Markdown schema, SEO and Zalo CTA | afc537e3ca750bdee2f9719f058533a00822389c |

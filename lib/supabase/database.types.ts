@@ -454,6 +454,51 @@ export type Database = {
           },
         ]
       }
+      newsletter_subscribers: {
+        Row: {
+          id: string
+          email: string
+          status: "pending" | "active" | "unsubscribed"
+          consent_timestamp: string | null
+          consent_source: string | null
+          consent_version: string | null
+          consent_ip_hash: string | null
+          consent_user_agent_hash: string | null
+          unsubscribe_token: string
+          unsubscribed_at: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          email: string
+          status?: "pending" | "active" | "unsubscribed"
+          consent_timestamp?: string | null
+          consent_source?: string | null
+          consent_version?: string | null
+          consent_ip_hash?: string | null
+          consent_user_agent_hash?: string | null
+          unsubscribe_token: string
+          unsubscribed_at?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          email?: string
+          status?: "pending" | "active" | "unsubscribed"
+          consent_timestamp?: string | null
+          consent_source?: string | null
+          consent_version?: string | null
+          consent_ip_hash?: string | null
+          consent_user_agent_hash?: string | null
+          unsubscribe_token?: string
+          unsubscribed_at?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       products: {
         Row: {
           attributes: Json
@@ -547,6 +592,25 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      cleanup_newsletter_retention: {
+        Args: Record<PropertyKey, never>
+        Returns: number
+      }
+      subscribe_newsletter: {
+        Args: {
+          p_email: string
+          p_source: string
+          p_version: string
+          p_token_digest: string
+          p_ip_hash: string | null
+          p_user_agent_hash: string | null
+        }
+        Returns: undefined
+      }
+      unsubscribe_newsletter: {
+        Args: { p_token: string }
+        Returns: boolean
+      }
       change_inquiry_assignment: {
         Args: { p_id: string; p_assignee_id: string | null; p_admin_url: string | null }
         Returns: Database["public"]["Tables"]["inquiries"]["Row"]

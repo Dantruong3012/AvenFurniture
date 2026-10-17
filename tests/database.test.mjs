@@ -73,15 +73,37 @@ test("MVP migration and RLS on isolated PostgreSQL", async (t) => {
   const rejects = (sql, params = [], code = "42501") => assert.rejects(db.query(sql, params), (error) =>
     code === "23503" ? ["23503", "23001"].includes(error.code) : error.code === code);
 
-  await t.test("all twelve public tables have RLS enabled", async () => {
+  await t.test("all thirteen public tables have RLS enabled", async () => {
     const { rows } = await db.query("select relname, relrowsecurity from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r'");
-    assert.equal(rows.length, 12);
+    assert.equal(rows.length, 13);
     assert.ok(rows.every((row) => row.relrowsecurity));
+  });
+  await t.test("newsletter roster requires a current staff session", async () => {
+    await as("service_role", null, () => db.query(
+      "select public.subscribe_newsletter($1,$2,$3,$4,$5,$6)",
+      ["reader@example.com", "newsletter_form", "2026-10", "a".repeat(64), null, null],
+    ));
+    for (const [role, id] of [["anon", null], ["authenticated", ids.outsider], ["authenticated", ids.blocked]]) {
+      await as(role, id, async () => {
+        if (role === "anon") await rejects("select email from public.newsletter_subscribers");
+        else assert.equal((await db.query("select email from public.newsletter_subscribers")).rows.length, 0);
+        await rejects("update public.newsletter_subscribers set status='unsubscribed'");
+      });
+    }
+    await as("authenticated", ids.staff, async () => {
+      assert.deepEqual((await db.query("select email from public.newsletter_subscribers")).rows, [{ email: "reader@example.com" }]);
+    });
+    await db.query("delete from auth.sessions where id=$1", [sessionIds.staff]);
+    await as("authenticated", ids.staff, async () => {
+      assert.equal((await db.query("select email from public.newsletter_subscribers")).rows.length, 0);
+    });
+    await db.query("insert into auth.sessions(id,user_id) values ($1,$2)", [sessionIds.staff, ids.staff]);
+    await db.query("delete from public.newsletter_subscribers where email='reader@example.com'");
   });
   await t.test("anonymous reads published catalog and media only; private tables/mutations denied", () => as("anon", null, async () => {
     assert.deepEqual((await db.query("select id from public.products")).rows, [{ id: published }]);
     assert.equal((await db.query("select * from public.media_assets")).rows.length, 1);
-    for (const table of ["admin_profiles", "inquiries", "inquiry_items", "inquiry_notes", "audit_logs", "email_outbox", "consultant_profiles"]) {
+    for (const table of ["admin_profiles", "inquiries", "inquiry_items", "inquiry_notes", "audit_logs", "email_outbox", "consultant_profiles", "newsletter_subscribers"]) {
       await rejects(`select * from public.${table}`);
     }
     await rejects("update public.products set name='Hacked'");
