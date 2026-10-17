@@ -26,6 +26,11 @@ export function assignableStaffRole(value: unknown, manager: StaffRole): "super_
   if (value === "admin" || value === "editor") return value;
   return value === "super_admin" && manager === "super_admin" ? value : null;
 }
+export function parseStaffActive(value: unknown): boolean | null {
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return null;
+}
 export function validStaffId(value: unknown): value is string {
   return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 }

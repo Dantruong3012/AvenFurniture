@@ -1,7 +1,7 @@
 # Workflow state
 
-Active task: -
-Current phase: IDLE
+Active task: staff-role-status
+Current phase: APPROVED
 Last completed task: staff-invite
 Next task: staff-role-status
 Blockers: -

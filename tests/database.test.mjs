@@ -272,16 +272,23 @@ test("MVP migration and RLS on isolated PostgreSQL", async (t) => {
     await as("authenticated", ids.staff, async () => assert.equal(await context(), null), secondSession);
     await db.query("insert into auth.sessions(id,user_id) values ($1,$2)", [sessionIds.staff, ids.staff]);
   });
-  await t.test("role changes are live; unlocking never resurrects pre-lock sessions", async () => {
+  await t.test("role and status changes revoke old sessions; fresh sign-in uses the current role", async () => {
+    const promotedSession = "20000000-0000-0000-0000-000000000012";
+    const demotedSession = "20000000-0000-0000-0000-000000000013";
     await db.query("update public.admin_profiles set role='super_admin' where user_id=$1", [ids.staff]);
-    await as("authenticated", ids.staff, async () => assert.equal((await context()).role, "super_admin"));
+    await as("authenticated", ids.staff, async () => assert.equal(await context(), null));
+    await db.query("insert into auth.sessions(id,user_id) values ($1,$2)", [promotedSession, ids.staff]);
+    await as("authenticated", ids.staff, async () => assert.equal((await context()).role, "super_admin"), promotedSession);
     await db.query("update public.admin_profiles set role='staff' where user_id=$1", [ids.staff]);
-    await as("authenticated", ids.staff, async () => assert.equal((await context()).role, "staff"));
+    await as("authenticated", ids.staff, async () => assert.equal(await context(), null), promotedSession);
+    await db.query("insert into auth.sessions(id,user_id) values ($1,$2)", [demotedSession, ids.staff]);
+    await as("authenticated", ids.staff, async () => assert.equal((await context()).role, "staff"), demotedSession);
     await db.query("update public.admin_profiles set active=false where user_id=$1", [ids.staff]);
-    await as("authenticated", ids.staff, async () => assert.equal(await context(), null));
+    await as("authenticated", ids.staff, async () => assert.equal(await context(), null), demotedSession);
     await db.query("update public.admin_profiles set active=true where user_id=$1", [ids.staff]);
-    await as("authenticated", ids.staff, async () => assert.equal(await context(), null));
-    await renewStaffSession();
+    await as("authenticated", ids.staff, async () => assert.equal(await context(), null), demotedSession);
+    await db.query("delete from auth.sessions where id=$1", [sessionIds.staff]);
+    await db.query("insert into auth.sessions(id,user_id) values ($1,$2)", [sessionIds.staff, ids.staff]);
     await as("authenticated", ids.staff, async () => assert.equal((await context()).role, "staff"));
   });
   await t.test("archived catalog hides images and unused media from anonymous users", async () => {

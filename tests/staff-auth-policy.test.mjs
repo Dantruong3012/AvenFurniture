@@ -57,6 +57,8 @@ test("staff role RLS, lockout and session revocation in isolated PostgreSQL", as
   await assert.rejects(as(ids.editor, () => db.query("insert into public.categories(name,slug) values ('Forbidden','forbidden')")), /row-level security/);
   await assert.rejects(db.query("update public.admin_profiles set active=false where user_id=$1", [ids.owner]), /last active super_admin/);
   await assert.rejects(db.query("update public.admin_profiles set role='editor' where user_id=$1", [ids.owner]), /last active super_admin/);
+  await assert.rejects(as(ids.owner, () => db.query("update public.admin_profiles set active=false where user_id=$1", [ids.owner])), /last active super_admin/);
+  await assert.rejects(as(ids.owner, () => db.query("update public.admin_profiles set role='admin' where user_id=$1", [ids.owner])), /last active super_admin/);
   await assert.rejects(db.query("delete from public.admin_profiles where user_id=$1", [ids.owner]), /last active super_admin/);
   await db.query("insert into auth.refresh_tokens(session_id) values ($1)", [sessionId(ids.editor)]);
   await db.query("update public.admin_profiles set active=false where user_id=$1", [ids.editor]);
@@ -65,8 +67,14 @@ test("staff role RLS, lockout and session revocation in isolated PostgreSQL", as
   assert.equal((await db.query("select count(*)::int as count from auth.refresh_tokens where session_id=$1", [sessionId(ids.editor)])).rows[0].count, 0);
   await db.query("update public.admin_profiles set active=true where user_id=$1", [ids.editor]);
   assert.equal(await as(ids.editor, context), null);
+  await db.query("insert into auth.refresh_tokens(session_id) values ($1),($2)", [sessionId(ids.owner), sessionId(ids.manager)]);
   await db.query("update public.admin_profiles set role='super_admin' where user_id=$1", [ids.manager]);
   await db.query("update public.admin_profiles set role='editor' where user_id=$1", [ids.owner]);
+  assert.equal((await db.query("select not_after <= now() as expired from auth.sessions where user_id=$1", [ids.owner])).rows[0].expired, true);
+  assert.equal((await db.query("select count(*)::int as count from auth.refresh_tokens where session_id=$1", [sessionId(ids.owner)])).rows[0].count, 0);
+  assert.equal(await as(ids.owner, context), null);
+  assert.equal((await db.query("select not_after <= now() as expired from auth.sessions where user_id=$1", [ids.manager])).rows[0].expired, true);
+  assert.equal((await db.query("select count(*)::int as count from auth.refresh_tokens where session_id=$1", [sessionId(ids.manager)])).rows[0].count, 0);
   assert.equal((await db.query("select active_count from private.admin_guard")).rows[0].active_count, 1);
   await db.query("insert into public.admin_profiles(user_id,display_name,role,invite_email,invited_at) values ($1,'Invited','staff','new@example.com',now())", [ids.other]);
   assert.equal((await db.query("select invite_email from public.admin_profiles where user_id=$1", [ids.other])).rows[0].invite_email, "new@example.com");
@@ -75,10 +83,15 @@ test("staff role RLS, lockout and session revocation in isolated PostgreSQL", as
 });
 
 test("invite validation accepts supported roles and rejects malformed addresses", () => {
-  const { staffRole, assignableStaffRole, parseStaffInvitation } = loadModule("lib/auth/validation.ts");
+  const { staffRole, assignableStaffRole, parseStaffActive, parseStaffInvitation } = loadModule("lib/auth/validation.ts");
   assert.equal(staffRole("owner"), null);
+  assert.equal(staffRole("super_admin"), "super_admin");
   assert.equal(assignableStaffRole("super_admin", "admin"), null);
   assert.equal(assignableStaffRole("super_admin", "super_admin"), "super_admin");
+  assert.equal(assignableStaffRole("owner", "super_admin"), null);
+  assert.equal(parseStaffActive("true"), true);
+  assert.equal(parseStaffActive("false"), false);
+  for (const invalid of [null, undefined, true, false, "TRUE", "1", "on", ""] ) assert.equal(parseStaffActive(invalid), null);
   for (const role of ["admin", "editor", "staff"]) {
     assert.deepEqual(parseStaffInvitation({ email: "  First.Last+team@sub.example.com  ", display_name: "  New Person  ", role }),
       { email: "first.last+team@sub.example.com", display_name: "New Person", role });
@@ -230,7 +243,7 @@ test("invite does not provision an Auth account that appeared after its first lo
 
 test("management actions reject super admin escalation and revoke access before Auth deletion", async () => {
   let managerRole = "admin", targetRole = "super_admin", targetActive = true;
-  let authDeleted = false;
+  let authDeleted = false, rejectRoleUpdate = false;
   const calls = [];
   const service = {
     auth: { admin: {
@@ -242,7 +255,7 @@ test("management actions reject super admin escalation and revoke access before 
       select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { user_id: ids.editor, role: targetRole, active: targetActive }, error: null }) }) }),
       update: (values) => ({
         eq() { return this; }, select() { return this; },
-        async maybeSingle() { calls.push(`profile:${JSON.stringify(values)}`); targetActive = values.active ?? targetActive; return { data: { user_id: ids.editor }, error: null }; },
+        async maybeSingle() { calls.push(`profile:${JSON.stringify(values)}`); if (values.role && rejectRoleUpdate) return { data: null, error: { code: "23514" } }; targetActive = values.active ?? targetActive; targetRole = values.role ?? targetRole; return { data: { user_id: ids.editor }, error: null }; },
       }),
     }),
   };
@@ -259,6 +272,26 @@ test("management actions reject super admin escalation and revoke access before 
   form.set("role", "editor");
   assert.ok((await actions.changeStaffRole(form)).error);
   assert.deepEqual(calls, []);
+  targetRole = "editor";
+  form.set("active", "false");
+  assert.match((await actions.setStaffActive(form)).error, /Only a super admin/);
+  assert.deepEqual(calls, []);
+  managerRole = "super_admin";
+  form.set("role", "owner");
+  assert.match((await actions.changeStaffRole(form)).error, /valid account and role/);
+  form.set("active", "on");
+  assert.match((await actions.setStaffActive(form)).error, /valid account and active status/);
+  assert.deepEqual(calls, []);
+  targetRole = "super_admin";
+  form.set("role", "admin");
+  rejectRoleUpdate = true;
+  assert.match((await actions.changeStaffRole(form)).error, /last active super admin/);
+  assert.deepEqual(calls, ['profile:{"role":"admin"}']);
+  calls.length = 0;
+  rejectRoleUpdate = false;
+  assert.match((await actions.changeStaffRole(form)).message, /sessions were revoked/);
+  assert.deepEqual(calls, ['profile:{"role":"admin"}']);
+  calls.length = 0;
   targetRole = "editor";
   form.set("active", "false");
   assert.ok((await actions.setStaffActive(form)).message);

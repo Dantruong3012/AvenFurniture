@@ -9,7 +9,7 @@ import { createClient } from "@/lib/supabase/server";
 import { inviteStaffMember, requireAdmin, requireStaffManager } from "./admin";
 import { revalidatePath } from "next/cache";
 import { readAdminSessionContext } from "./session";
-import { assignableStaffRole, parseStaffInvitation, recoveryType, staffRole, validEmail, validNewPassword, validStaffId } from "./validation";
+import { assignableStaffRole, parseStaffActive, parseStaffInvitation, recoveryType, staffRole, validEmail, validNewPassword, validStaffId } from "./validation";
 
 export type AuthState = { error?: string; message?: string };
 const field = (form: FormData, name: string) => String(form.get(name) ?? "");
@@ -156,8 +156,9 @@ async function managedTarget(id: string, managerRole: string) {
 
 export async function changeStaffRole(form: FormData): Promise<AuthState> {
   const { user, session } = await requireStaffManager();
+  if (session.role !== "super_admin") return { error: "Only a super admin can change team roles." };
   const id = field(form, "user_id");
-  const role = assignableStaffRole(field(form, "role"), session.role);
+  const role = assignableStaffRole(form.get("role"), session.role);
   if (!validStaffId(id) || !role) return { error: "Choose a valid account and role." };
   if (!(await allowAuthMutation("staff-role", user.id, 20))) return teamError;
   const managed = await managedTarget(id, session.role);
@@ -167,18 +168,18 @@ export async function changeStaffRole(form: FormData): Promise<AuthState> {
     .eq("user_id", id).eq("role", managed.target.role).select("user_id").maybeSingle();
   if (error || !data) return { error: "Role change was rejected. The last active super admin must remain." };
   revalidatePath("/admin/team");
-  return { message: "Role updated. Existing sessions now use the new role." };
+  return { message: id === user.id ? "Role updated. Sign in again to continue." : "Role updated. Existing sessions were revoked." };
 }
 
 export async function setStaffActive(form: FormData): Promise<AuthState> {
   const { user, session } = await requireStaffManager();
+  if (session.role !== "super_admin") return { error: "Only a super admin can change account status." };
   const id = field(form, "user_id");
-  const active = field(form, "active");
-  if (!validStaffId(id) || (active !== "true" && active !== "false")) return teamError;
+  const enable = parseStaffActive(form.get("active"));
+  if (!validStaffId(id) || enable === null) return { error: "Choose a valid account and active status." };
   if (!(await allowAuthMutation("staff-active", user.id, 20))) return teamError;
   const managed = await managedTarget(id, session.role);
   if (!managed) return teamError;
-  const enable = active === "true";
   if (enable) {
     const currentAuth = await managed.service.auth.admin.getUserById(id);
     if (currentAuth.error || !currentAuth.data.user || currentAuth.data.user.deleted_at) return { error: "A deleted Auth account cannot be enabled. Send a new invitation instead." };
