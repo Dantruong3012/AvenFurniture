@@ -3,7 +3,7 @@
 Status: READY_FOR_REVIEW
 Changed paths: lib/email/outbox.ts, lib/email/types.ts, lib/inquiries/actions.ts, lib/repositories/supabaseInquiryRepository.ts, lib/supabase/database.types.ts, supabase/migrations/20261017163000_inquiry_change_events.sql, tests/admin-inquiry.test.mjs, tests/database.test.mjs, tests/email-outbox.test.mjs, tests/inquiry.test.mjs
 Commit: feat(email-change-events): implement approved task
-Commit hash: -
+Commit hash: 195ef51384322066e6e2b0c2cf73ae99bba942d1
 
 Implemented atomic inquiry change event queueing, idempotency, and mock delivery support.
 

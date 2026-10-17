@@ -22,7 +22,7 @@ Only Antigravity adds tasks from a roadmap approved by the user. Each task also 
 | outbox-admin-health | P1 | outbox-operations | Codex | DONE | APPROVED | Authorized admin sees aggregate outbox health without message body exposure or delivery mutation | 0273768b8ce18a845f8738bb396d15e79af094e1 |
 | outbox-admin-retry | P1 | outbox-admin-health,email-delivery-policy | Codex | BACKLOG | NEEDS_DECISION | Authorized admin can request selected failed-job retries under approved provider and scheduler policy | - |
 | email-event-schema-policy | P1 | - | Antigravity | DONE | APPROVED | Approve durable event schema, payload model, mock/deferred provider contract, and idempotency rules | ad823ac31dc92e256bf1493c6e161a627139a2be |
-| email-change-events | P1 | email-event-schema-policy,inquiry-assignment | Codex | APPROVED | APPROVED | Transactional event queueing for inquiry assignment and status updates with idempotency and mock delivery | - |
+| email-change-events | P1 | email-event-schema-policy,inquiry-assignment | Codex | DONE | APPROVED | Transactional event queueing for inquiry assignment and status updates with idempotency and mock delivery | 195ef51384322066e6e2b0c2cf73ae99bba942d1 |
 | staff-auth-policy | P0 | - | Antigravity | BACKLOG | NEEDS_DECISION | Approve invite, role, disable and deletion policy including Auth session handling and RLS | - |
 | staff-invite | P1 | staff-auth-policy | Codex | BACKLOG | NEEDS_DECISION | Super admin invites staff with retry safe Auth and profile lifecycle | - |
 | staff-role-status | P1 | staff-auth-policy | Codex | BACKLOG | NEEDS_DECISION | Super admin updates role and active status with last admin and session safeguards | - |
