@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assessQueue, inspectRights, assessAgentQuota, releasePrerequisites, orchestratorArgs } from './autopilot-core.mjs';
+import { assessQueue, inspectRights, assessAgentQuota, releasePrerequisites, orchestratorArgs, loadManagementCredentials } from './autopilot-core.mjs';
 import { agentEnvironment, redactSensitive } from './orchestrator-core.mjs';
 import { execute } from './orchestrator-core.mjs';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -184,3 +184,20 @@ test('actual child execution strips management token and redacts private process
     rmSync(dir, { recursive: true, force: true });
   }
 });
+test('loadManagementCredentials safely loads external env file if present', () => {
+  let loadedPath = null;
+  const mockLoader = (p) => { loadedPath = p; };
+  const res1 = loadManagementCredentials({ AVEN_MANAGEMENT_ENV: '/non/existent/path/management.env' }, mockLoader);
+  assert.equal(res1.loaded, false);
+  assert.equal(loadedPath, null);
+
+  const res2 = loadManagementCredentials({ AVEN_MANAGEMENT_ENV: import.meta.filename }, mockLoader);
+  assert.equal(res2.loaded, true);
+  assert.equal(loadedPath, import.meta.filename);
+
+  const throwingLoader = () => { throw new Error('EACCES'); };
+  const res3 = loadManagementCredentials({ AVEN_MANAGEMENT_ENV: import.meta.filename }, throwingLoader);
+  assert.equal(res3.loaded, false);
+  assert.equal(res3.error, 'EACCES');
+});
+

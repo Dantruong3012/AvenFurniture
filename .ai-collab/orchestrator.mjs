@@ -781,7 +781,7 @@ async function taskLoop() {
       } else if (git('write-tree') !== checkpoint.commitTree) throw new Error('Index changed since commit checkpoint');
       const identity = checkpoint.identity;
       if (config.deterministicCommit === true && config.commitAgent !== 'codex') {
-        checkpoint.commitRequest = { agent: 'orchestrator', operation: 'commit', result: { status: 'COMMIT_REQUESTED' } }; save();
+        checkpoint.commitRequest = { agent: 'orchestrator', operation: 'commit', exitCode: 0, result: { status: 'COMMIT_REQUESTED', details: JSON.stringify({ parent: checkpoint.baseHead, tree: checkpoint.commitTree, message: checkpoint.title }) } }; save();
       } else {
         const receipt = await agent('codex', 'commit', `Antigravity approved this task; coordinator independently passed checks, scanned and staged exact task files. You are in read-only mode. Do not run write commands, stage, commit, edit, amend, reset, push, or deploy. Request the coordinator's narrow Git executor to create ONE local commit. Return status COMMIT_REQUESTED and details as a JSON string encoding exactly {"parent":"${checkpoint.baseHead}","tree":"${checkpoint.commitTree}","message":${JSON.stringify(checkpoint.title)}}. Verify supplied review/check evidence: ${JSON.stringify(checkpoint.checks)}; reviewer summary: ${checkpoint.reviewReceipt.result.summary}. Return BLOCKED if not appropriate.`, ['COMMIT_REQUESTED']);
         const request = JSON.parse(receipt.result.details);

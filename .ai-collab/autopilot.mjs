@@ -6,7 +6,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { backlog } from './workflow.mjs';
 import { agentEnvironment, atomicJSON, quotaFailure } from './orchestrator-core.mjs';
-import { inspectLocal, inspectRights, assessAgentQuota, releasePrerequisites, orchestratorArgs } from './autopilot-core.mjs';
+import { inspectLocal, inspectRights, assessAgentQuota, releasePrerequisites, orchestratorArgs, loadManagementCredentials } from './autopilot-core.mjs';
+
+loadManagementCredentials();
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const workspace = join(root, '.ai-collab');

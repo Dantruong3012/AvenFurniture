@@ -1,6 +1,20 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
+
+export function loadManagementCredentials(env = process.env, loader = process.loadEnvFile) {
+  const target = env.AVEN_MANAGEMENT_ENV || join(homedir(), '.config/avenfurniture/management.env');
+  if (existsSync(target) && typeof loader === 'function') {
+    try {
+      loader(target);
+      return { loaded: true, path: target };
+    } catch (err) {
+      return { loaded: false, path: target, error: err.message };
+    }
+  }
+  return { loaded: false, path: target };
+}
 
 const sha = /^[a-f0-9]{40}$/;
 export function gitRead(root, ...args) {

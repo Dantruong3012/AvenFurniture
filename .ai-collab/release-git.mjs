@@ -30,7 +30,7 @@ export function verifyCompleted(root, completed, checks, git = gitRunner(root)) 
   if (!c?.task?.id || !/^[a-z0-9][a-z0-9-]*$/.test(c.task.id) || c.status !== 'DONE' || c.phase !== 'COMMITTED' ||
     ![c.baseHead, c.commit, c.commitTree, c.metadataTree].every((value) => shaPattern.test(value ?? ''))) throw new Error('No verified completed task checkpoint');
   if (c.reviewReceipt?.agent !== 'antigravity' || c.reviewReceipt?.operation !== 'review' || c.reviewReceipt?.exitCode !== 0 || c.reviewReceipt?.result?.status !== 'APPROVED' ||
-    c.commitRequest?.agent !== 'codex' || c.commitRequest?.operation !== 'commit' || c.commitRequest?.exitCode !== 0 || c.commitRequest?.result?.status !== 'COMMIT_REQUESTED') throw new Error('Missing genuine coordinator review/commit receipts');
+    !['codex', 'orchestrator'].includes(c.commitRequest?.agent) || c.commitRequest?.operation !== 'commit' || c.commitRequest?.exitCode !== 0 || c.commitRequest?.result?.status !== 'COMMIT_REQUESTED') throw new Error('Missing genuine coordinator review/commit receipts');
   if (!Array.isArray(c.checks) || !checks.length || c.checks.length !== checks.length || c.checks.some((check, index) => check.exitCode !== 0 || digest(check.command) !== digest(checks[index]))) throw new Error('Required independent checks did not pass');
   const request = JSON.parse(c.commitRequest.result.details);
   if (request.parent !== c.baseHead || request.tree !== c.commitTree || request.message !== c.title) throw new Error('Commit request does not match reviewed tree');

@@ -287,3 +287,22 @@ test('an unresolved external operation lock is never silently recovered or remov
     releaseLock(lock); assert.ok(existsSync(join(lock, 'owner.json')));
   } finally { rmSync(dir, { recursive: true }); }
 });
+test('deterministic coordinator commit request satisfies completion verification', () => {
+  const f = fixture(); try {
+    const orchestratorCheckpoint = {
+      ...f.checkpoint,
+      commitRequest: {
+        agent: 'orchestrator',
+        operation: 'commit',
+        exitCode: 0,
+        result: {
+          status: 'COMMIT_REQUESTED',
+          details: JSON.stringify({ parent: f.checkpoint.baseHead, tree: f.checkpoint.commitTree, message: f.checkpoint.title }),
+        },
+      },
+    };
+    const sha = verifyCompleted(f.root, orchestratorCheckpoint, checks, f.git);
+    assert.equal(sha, f.sha);
+  } finally { f.cleanup(); }
+});
+
