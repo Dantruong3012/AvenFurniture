@@ -82,6 +82,49 @@ test("staff role RLS, lockout and session revocation in isolated PostgreSQL", as
   await assert.rejects(db.query("update public.admin_profiles set invite_email='NEW@example.com' where user_id=$1", [ids.editor]), /admin_profiles_invite_email_valid/);
 });
 
+test("offboarding retains inquiry references, notes and audit actors", async (t) => {
+  const db = new PGlite();
+  t.after(() => db.close());
+  await db.exec(`
+    create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls;
+    create schema auth;
+    create table auth.users(id uuid primary key, email text, deleted_at timestamptz);
+    create table auth.sessions(id uuid primary key, user_id uuid not null references auth.users(id), created_at timestamptz not null default now(), not_after timestamptz);
+    create table auth.refresh_tokens(session_id uuid);
+    create function auth.jwt() returns jsonb language sql stable as $$ select '{}'::jsonb $$;
+    create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
+    grant usage on schema auth to anon, authenticated, service_role;
+    grant execute on function auth.uid() to anon, authenticated, service_role;
+  `);
+  for (const file of (await readdir(new URL("../supabase/migrations/", import.meta.url))).filter((name) => name.endsWith(".sql")).sort()) {
+    await db.exec(await readFile(new URL(`../supabase/migrations/${file}`, import.meta.url), "utf8"));
+  }
+  const inquiryId = "40000000-0000-0000-0000-000000000001";
+  await db.query("insert into auth.users(id,email) values ($1,'owner@example.com'),($2,'editor@example.com')", [ids.owner, ids.editor]);
+  await db.query("insert into auth.sessions(id,user_id) values ($1,$2)", [sessionId(ids.editor), ids.editor]);
+  await db.query("insert into auth.refresh_tokens(session_id) values ($1)", [sessionId(ids.editor)]);
+  await db.query("insert into public.admin_profiles(user_id,display_name,role) values ($1,'Owner','super_admin'),($2,'Editor','editor')", [ids.owner, ids.editor]);
+  await db.query("insert into public.consultant_profiles(user_id,public_name,zalo_phone,enabled) values ($1,'Editor','0901234567',true)", [ids.editor]);
+  await db.query(`insert into public.inquiries(id,idempotency_key,contact_name,contact_phone,original_submission,source,assignee_id)
+    values ($1,$2,'Customer','0901234567','{}','contact',$3)`, [inquiryId, "40000000-0000-0000-0000-000000000002", ids.editor]);
+  await db.query("insert into public.inquiry_notes(inquiry_id,author_id,body) values ($1,$2,'Followed up')", [inquiryId, ids.editor]);
+  await db.query("insert into public.audit_logs(actor_id,action,entity_table,entity_id) values ($1,'inquiry_assigned','inquiries',$2)", [ids.editor, inquiryId]);
+
+  await db.query("update public.admin_profiles set active=false where user_id=$1", [ids.editor]);
+  await db.query("update auth.users set deleted_at=now() where id=$1", [ids.editor]);
+  assert.equal((await db.query("select not_after <= now() as expired from auth.sessions where user_id=$1", [ids.editor])).rows[0].expired, true);
+  assert.equal((await db.query("select count(*)::int as count from auth.refresh_tokens where session_id=$1", [sessionId(ids.editor)])).rows[0].count, 0);
+  assert.equal((await db.query("select assignee_id from public.inquiries where id=$1", [inquiryId])).rows[0].assignee_id, ids.editor);
+  assert.equal((await db.query("select author_id from public.inquiry_notes where inquiry_id=$1", [inquiryId])).rows[0].author_id, ids.editor);
+  assert.equal((await db.query("select actor_id from public.audit_logs where action='inquiry_assigned' and entity_id=$1", [inquiryId])).rows[0].actor_id, ids.editor);
+  await assert.rejects(db.query("delete from public.admin_profiles where user_id=$1", [ids.editor]), /deactivated and retained/);
+  await assert.rejects(db.query("delete from auth.users where id=$1", [ids.editor]), /foreign key/);
+
+  await db.query("delete from public.consultant_profiles where user_id=$1", [ids.editor]);
+  assert.equal((await db.query("select count(*)::int as count from public.inquiries where id=$1", [inquiryId])).rows[0].count, 1);
+  assert.equal((await db.query("select changes->>'public_name' as name from public.audit_logs where entity_table='consultant_profiles' and entity_id=$1", [ids.editor])).rows[0].name, "Editor");
+});
+
 test("invite validation accepts supported roles and rejects malformed addresses", () => {
   const { staffRole, assignableStaffRole, parseStaffActive, parseStaffInvitation } = loadModule("lib/auth/validation.ts");
   assert.equal(staffRole("owner"), null);
@@ -210,6 +253,8 @@ test("invite reconciles a pending Auth account and profile without duplicates", 
   assert.deepEqual(await teamInviteStatuses([ids.other]), { [ids.other]: { status: "active", email: request.email } });
   profiles.get(ids.other).active = false;
   assert.equal(await inviteStaffMember(request, "https://aven.test/auth/confirm"), "disabled");
+  users[0].deleted_at = "2026-10-17T12:00:00Z";
+  assert.deepEqual(await teamInviteStatuses([ids.other]), { [ids.other]: { status: "removed" } });
   assert.equal(invites, 4);
 });
 

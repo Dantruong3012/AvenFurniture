@@ -40,11 +40,13 @@ async function listAuthUsers(service: ReturnType<typeof createServiceClient>): P
   }
 }
 
-export async function teamInviteStatuses(ids: string[]): Promise<Record<string, { status: "pending" | "active"; email: string }>> {
+export async function teamInviteStatuses(ids: string[]): Promise<Record<string, { status: "pending" | "active" | "removed"; email?: string }>> {
   const wanted = new Set(ids);
-  const statuses: Record<string, { status: "pending" | "active"; email: string }> = {};
+  const statuses: Record<string, { status: "pending" | "active" | "removed"; email?: string }> = {};
   for (const user of await listAuthUsers(createServiceClient())) {
-    if (wanted.has(user.id) && !user.deleted_at && user.email) statuses[user.id] = {
+    if (!wanted.has(user.id)) continue;
+    if (user.deleted_at) { statuses[user.id] = { status: "removed" }; continue; }
+    if (user.email) statuses[user.id] = {
       status: user.email_confirmed_at ? "active" : "pending", email: user.email,
     };
   }
