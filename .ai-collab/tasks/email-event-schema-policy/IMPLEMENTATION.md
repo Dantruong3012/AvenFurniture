@@ -3,7 +3,7 @@
 Status: READY_FOR_REVIEW
 Changed paths: lib/email/types.ts, lib/email/mailer.ts, lib/email/outbox.ts, tests/email-outbox.test.mjs
 Commit: feat(email-event-schema-policy): implement approved task
-Commit hash: -
+Commit hash: ad823ac31dc92e256bf1493c6e161a627139a2be
 
 Implemented a versioned email event and payload contract, deterministic idempotency keys, transaction-scoped enqueue validation, and mock/deferred provider behavior.
 
