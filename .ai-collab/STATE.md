@@ -3,7 +3,7 @@
 Active task: -
 Current phase: IDLE
 Last completed task: storefront-consultant-zalo
-Next task: -
+Next task: admin-inquiry-export-metrics
 Blockers: -
 Last successful commit: 24a596140c46f2c385a892ebb44d640a8564ac39
 
