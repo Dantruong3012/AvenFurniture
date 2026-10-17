@@ -29,6 +29,7 @@ export function assessQueue({ checkpoint, tasks, blockedArtifacts = [], branch, 
   if (credentialFileRisk) return { status: 'BLOCKED', reason: 'Privileged credentials are readable inside the agent workspace; move management tokens outside this checkout' };
   if (!remoteMatches) return { status: 'BLOCKED', reason: 'Origin does not match the configured GitHub repository' };
   if (branch !== expectedBranch) return { status: 'BLOCKED', reason: 'Checkout is not the configured development branch' };
+  if (checkpoint?.task && !['DONE', 'IDLE'].includes(checkpoint.status) && tasks.find((task) => task.id === checkpoint.task.id)?.scopeApproval !== 'APPROVED') return { status: 'BLOCKED', task: checkpoint.task.id, reason: 'Task scope approval is missing or withdrawn' };
   if (checkpoint?.status === 'PAUSED_QUOTA') {
     const retryAt = checkpoint.quota?.retryAt;
     if (quotaReady) return { status: 'RESUME', task: checkpoint.task?.id };
@@ -41,7 +42,7 @@ export function assessQueue({ checkpoint, tasks, blockedArtifacts = [], branch, 
   if (checkpoint && ['STOPPED', 'RUNNING'].includes(checkpoint.status)) return { status: 'RESUME', task: checkpoint.task?.id };
   if (checkpoint && !['DONE', 'IDLE'].includes(checkpoint.status)) return { status: 'BLOCKED', task: checkpoint.task?.id, reason: 'Unknown checkpoint status; inspect before resuming' };
   if (dirty) return { status: 'BLOCKED', reason: 'Working tree or index is dirty; preserve existing work' };
-  const eligible = tasks.filter((task) => ['READY', 'BACKLOG'].includes(task.status) && task.dependencies.every((id) => tasks.some((dep) => dep.id === id && dep.status === 'DONE')))
+  const eligible = tasks.filter((task) => task.scopeApproval === 'APPROVED' && ['READY', 'BACKLOG'].includes(task.status) && task.dependencies.every((id) => tasks.some((dep) => dep.id === id && dep.status === 'DONE')))
     .sort((a, b) => a.priority.localeCompare(b.priority) || a.lineNumber - b.lineNumber);
   if (eligible.length) return { status: 'RUN', task: eligible[0].id };
   if (tasks.every((task) => task.status === 'DONE')) return { status: 'COMPLETE' };
@@ -71,7 +72,7 @@ export function inspectLocal(root, queue, config, quotaReady = false) {
 }
 export function orchestratorArgs(local, quotaReady = false) {
   if (local.status === 'RESUME') return local.checkpoint?.status === 'PAUSED_QUOTA' && quotaReady ? ['resume', '--quota-ready'] : ['resume'];
-  if (local.status === 'RUN') return ['run'];
+  if (local.status === 'RUN' || local.status === 'COMPLETE') return ['run'];
   throw new Error('Coordinator invocation requires RUN or RESUME preflight');
 }
 export function assessAgentQuota(receipt, quotaReady = false, now = Date.now(), smokeProof = null, runnerDigest = null) {

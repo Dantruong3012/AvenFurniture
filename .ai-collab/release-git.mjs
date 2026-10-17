@@ -6,6 +6,8 @@ import { atomicJSON, assertNoSecrets, changes, digest, snapshot } from './orches
 const shaPattern = /^[a-f0-9]{40}$/;
 export function validateReleaseConfig(config) {
   if (typeof config.enabled !== 'boolean' || config.releaseMode !== 'manual' || config.remote !== 'origin' ||
+    (config.developmentPushEnabled !== undefined && typeof config.developmentPushEnabled !== 'boolean') ||
+    (config.developmentPushEnabled === true && config.developmentBranch !== 'dev/aven-autonomous-backlog') ||
     !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(config.repository) ||
     !/^dev\/[A-Za-z0-9_/-]+$/.test(config.developmentBranch) || config.productionBranch !== 'main' ||
     config.developmentBranch.includes('..') || !Number.isInteger(config.timeoutMs) || config.timeoutMs < 1000 || config.timeoutMs > 300000 ||
@@ -97,8 +99,8 @@ function remoteSha(config, git, branch = config.developmentBranch) {
 }
 export function pushCompleted({ root, config, evidence, checks, git = gitRunner(root, config.timeoutMs), save, now = () => new Date().toISOString() }) {
   validateReleaseConfig(config);
-  if (!config.enabled) throw new Error('Release automation is disabled');
-  let state = { version: 1, stage: 'COMMITTED', sha: evidence?.sha, task: evidence?.checkpoint?.task?.id, policyDigest: digest(config), timestamp: now() };
+  if (!config.enabled && !config.developmentPushEnabled) throw new Error('Development push is disabled');
+  let state = { version: 1, stage: 'COMMITTED', sha: evidence?.sha, task: evidence?.checkpoint?.task?.id, remote: config.remote, remoteBranch: config.developmentBranch, policyDigest: digest(config), timestamp: now() };
   try {
     if (!evidence || evidence.version !== 1 || verifyCompleted(root, evidence.checkpoint, checks, git) !== evidence.sha) throw new Error('Invalid completion evidence');
     inspectGit(config, evidence.sha, git);
@@ -117,7 +119,7 @@ export function pushCompleted({ root, config, evidence, checks, git = gitRunner(
     }
     const remote = remoteSha(config, git);
     if (remote !== evidence.sha) throw new Error(pushFailed ? 'Push failed; remote SHA is not the intended revision' : 'Remote SHA verification failed');
-    state = { ...state, stage: 'PUSHED', remoteSha: remote, timestamp: now(), reconciled: pushFailed || before === evidence.sha, nextAction: 'Preview tracking requires milestone M2' };
+    state = { ...state, stage: 'PUSHED', remoteSha: remote, timestamp: now(), reconciled: pushFailed || before === evidence.sha, nextAction: config.enabled ? 'Preview tracking requires milestone M2' : 'Development push verified; Production release remains disabled' };
     save(state);
     return state;
   } catch (error) {

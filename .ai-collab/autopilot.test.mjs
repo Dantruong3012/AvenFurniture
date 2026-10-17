@@ -7,13 +7,22 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const task = (id, status, dependencies = [], lineNumber = 1) => ({ id, status, dependencies, priority: 'P0', lineNumber });
+const task = (id, status, dependencies = [], lineNumber = 1, scopeApproval = 'APPROVED') => ({ id, status, dependencies, priority: 'P0', lineNumber, scopeApproval });
 const safe = { checkpoint: null, tasks: [task('ready', 'READY')], blockedArtifacts: [], branch: 'dev/aven-autonomous-backlog', expectedBranch: 'dev/aven-autonomous-backlog', dirty: false, locked: false, roadmapApproved: true };
 
 test('autopilot selects work and never repeats a completed task', () => {
   assert.deepEqual(assessQueue(safe), { status: 'RUN', task: 'ready' });
   assert.deepEqual(assessQueue({ ...safe, tasks: [task('ready', 'DONE')] }), { status: 'COMPLETE' });
   assert.deepEqual(assessQueue({ ...safe, tasks: [task('next', 'READY', ['old']), task('old', 'DONE')] }), { status: 'RUN', task: 'next' });
+});
+test('autopilot never selects a task without explicit scope approval', () => {
+  for (const status of ['READY', 'BACKLOG']) {
+    const unapproved = task('unapproved', status, [], 1, 'NEEDS_DECISION');
+    assert.deepEqual(assessQueue({ ...safe, tasks: [unapproved, task('approved', 'READY', [], 2)] }), { status: 'RUN', task: 'approved' });
+    assert.equal(assessQueue({ ...safe, tasks: [unapproved] }).status, 'BLOCKED');
+    assert.equal(assessQueue({ ...safe, tasks: [{ ...unapproved, scopeApproval: undefined }] }).status, 'BLOCKED');
+  }
+  assert.match(assessQueue({ ...safe, checkpoint: { status: 'STOPPED', task: { id: 'ready' } }, tasks: [task('ready', 'READY', [], 1, 'NEEDS_DECISION')] }).reason, /scope approval/);
 });
 test('architectural blocker, unreviewed artifact and dirty workspace stop automatic work', () => {
   const checkpoint = { status: 'BLOCKED', task: { id: 'admin-inquiry-portal' } };
@@ -42,6 +51,7 @@ test('explicit quota-ready forwards only for a paused coordinator resume', () =>
   assert.deepEqual(orchestratorArgs(paused), ['resume']);
   assert.deepEqual(orchestratorArgs({ status: 'RESUME', checkpoint: { status: 'STOPPED' } }, true), ['resume']);
   assert.deepEqual(orchestratorArgs({ status: 'RUN' }, true), ['run']);
+  assert.deepEqual(orchestratorArgs({ status: 'COMPLETE' }), ['run']);
   assert.throws(() => orchestratorArgs({ status: 'PAUSED_QUOTA' }, true));
 });
 test('quota-ready still enforces branch, remote, credential and lock guards', () => {

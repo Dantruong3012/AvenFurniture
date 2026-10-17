@@ -10,6 +10,7 @@ const workspace = join(root, '.ai-collab');
 const backlogPath = join(workspace, 'BACKLOG.md');
 const statePath = join(workspace, 'STATE.md');
 const statuses = new Set(['BACKLOG', 'PLANNING', 'READY', 'IN_PROGRESS', 'TESTING', 'READY_FOR_REVIEW', 'CHANGES_REQUESTED', 'APPROVED', 'COMMITTED', 'DONE', 'BLOCKED', 'PAUSED_QUOTA']);
+const scopeApprovals = new Set(['APPROVED', 'NEEDS_DECISION']);
 const taskIdPattern = /^[a-z0-9][a-z0-9-]*$/;
 
 function fail(message) { throw new Error(message); }
@@ -38,11 +39,11 @@ function backlog() {
     const line = lines[lineNumber];
     if (!line.startsWith('| ') || line.includes('| ---') || line.startsWith('| Task ID ')) continue;
     const cells = line.split('|').slice(1, -1).map((cell) => cell.trim());
-    if (cells.length !== 7) fail(`Invalid BACKLOG row ${lineNumber + 1}`);
-    const [id, priority, dependencies, owner, status, criteria, hash] = cells;
-    if (!taskIdPattern.test(id) || !/^P[0-3]$/.test(priority) || !statuses.has(status) || !owner || !criteria || !hash) fail(`Invalid BACKLOG row ${lineNumber + 1}`);
+    if (cells.length !== 8) fail(`Invalid BACKLOG row ${lineNumber + 1}`);
+    const [id, priority, dependencies, owner, status, scopeApproval, criteria, hash] = cells;
+    if (!taskIdPattern.test(id) || !/^P[0-3]$/.test(priority) || !statuses.has(status) || !scopeApprovals.has(scopeApproval) || !owner || !criteria || !hash) fail(`Invalid BACKLOG row ${lineNumber + 1}`);
     if (tasks.some((task) => task.id === id)) fail(`Duplicate task ${id}`);
-    tasks.push({ id, priority, dependencies: dependencies === '-' ? [] : dependencies.split(',').map((dep) => dep.trim()), owner, status, criteria, hash, lineNumber, cells });
+    tasks.push({ id, priority, dependencies: dependencies === '-' ? [] : dependencies.split(',').map((dep) => dep.trim()), owner, status, scopeApproval, criteria, hash, lineNumber, cells });
   }
   for (const task of tasks) for (const dep of task.dependencies) {
     if (!taskIdPattern.test(dep) || dep === task.id || !tasks.some((candidate) => candidate.id === dep)) fail(`Invalid dependency ${dep} on ${task.id}`);
@@ -56,13 +57,13 @@ function hasBlocker(task) {
   });
 }
 function nextTask(tasks) {
-  return tasks.filter((task) => task.status === 'READY' && !hasBlocker(task) && task.dependencies.every((dep) => tasks.some((candidate) => candidate.id === dep && candidate.status === 'DONE' && !hasBlocker(candidate))))
+  return tasks.filter((task) => task.scopeApproval === 'APPROVED' && task.status === 'READY' && !hasBlocker(task) && task.dependencies.every((dep) => tasks.some((candidate) => candidate.id === dep && candidate.status === 'DONE' && !hasBlocker(candidate))))
     .sort((a, b) => a.priority.localeCompare(b.priority) || a.lineNumber - b.lineNumber)[0] ?? null;
 }
 function setTaskRow(data, task, status, hash = task.hash) {
   const cells = [...task.cells];
   cells[4] = status;
-  cells[6] = hash;
+  cells[7] = hash;
   data.lines[task.lineNumber] = `| ${cells.join(' | ')} |`;
   writeFileSync(backlogPath, data.lines.join('\n'));
 }

@@ -655,7 +655,7 @@ async function agent(kind, phase, prompt, statuses, transientAttempt = 0) {
 function select() {
   const data = backlog();
   if (field(data.content, 'Roadmap approval') !== 'APPROVED') throw new Error('Roadmap is not APPROVED');
-  return nextTask(data.tasks) ?? data.tasks.filter((t) => t.status === 'BACKLOG' && !hasBlocker(t) && t.dependencies.every((id) => data.tasks.some((dep) => dep.id === id && dep.status === 'DONE' && !hasBlocker(dep)))).sort((a, b) => a.priority.localeCompare(b.priority) || a.lineNumber - b.lineNumber)[0];
+  return nextTask(data.tasks) ?? data.tasks.filter((t) => t.scopeApproval === 'APPROVED' && t.status === 'BACKLOG' && !hasBlocker(t) && t.dependencies.every((id) => data.tasks.some((dep) => dep.id === id && dep.status === 'DONE' && !hasBlocker(dep)))).sort((a, b) => a.priority.localeCompare(b.priority) || a.lineNumber - b.lineNumber)[0];
 }
 function assertTaskScope(baseline = checkpoint.baseline) {
   assertScope(baseline, snapshot(root), [...checkpoint.paths, '.ai-collab/BACKLOG.md', '.ai-collab/STATE.md', ...['PLAN.md', 'IMPLEMENTATION.md', 'REVIEW.md', 'IMPLEMENTATION_BRIEF.md', 'IMPLEMENTATION_SUMMARY.md', 'VERIFY_REPORT.md', 'REWORK.md'].map((name) => `.ai-collab/tasks/${checkpoint.task.id}/${name}`)]);
@@ -820,11 +820,13 @@ async function run(resume) {
   const stop = () => writeFileSync(stopFile, 'stop\n');
   process.on('SIGINT', stop); process.on('SIGTERM', stop);
   let quotaResume = false;
+  let handoffSha = null;
   try {
     if (resume) {
       if (!existsSync(checkpointPath)) throw new Error('No checkpoint to resume');
       checkpoint = JSON.parse(read(checkpointPath));
       if (checkpoint.status === 'BLOCKED') throw new Error('BLOCKED checkpoint requires investigation; it cannot be silently resumed');
+      if (checkpoint.task && !['DONE', 'IDLE'].includes(checkpoint.status) && backlog().tasks.find((task) => task.id === checkpoint.task.id)?.scopeApproval !== 'APPROVED') throw new Error('Task scope approval is missing or withdrawn');
       if (checkpoint.status === 'PAUSED_QUOTA') {
         const quotaReady = process.argv.slice(3).includes('--quota-ready');
         if (checkpoint.quota?.retryAt && Date.now() < Date.parse(checkpoint.quota.retryAt) && !quotaReady) throw new Error(`Antigravity quota pause remains until ${checkpoint.quota.retryAt}; use --quota-ready only after verifying CLI availability`);
@@ -843,9 +845,20 @@ async function run(resume) {
     } else {
       if (existsSync(checkpointPath) && !['DONE', 'IDLE'].includes(JSON.parse(read(checkpointPath)).status)) throw new Error('Unfinished checkpoint; use status/resume');
       if (git('status', '--porcelain')) throw new Error('Dirty working tree preserved. Run from a clean dedicated checkout; do not reset/stash other work');
+      checkpoint = existsSync(checkpointPath) ? JSON.parse(read(checkpointPath)) : null;
       rmSync(stopFile, { force: true });
     }
     while (true) {
+      if (checkpoint?.status === 'DONE' && checkpoint.task) {
+        const releasePolicyPath = join(workspace, 'release.config.json');
+        if (existsSync(releasePolicyPath) && JSON.parse(read(releasePolicyPath)).developmentPushEnabled === true && handoffSha !== git('rev-parse', 'HEAD')) {
+          const { afterCompleted } = await import('./release.mjs');
+          const released = await afterCompleted(root, checkpoint, config.checks);
+          event('DEVELOPMENT_PUSH_RECONCILIATION', released);
+          if (!released.ok) { process.exitCode = 1; return; }
+          handoffSha = released.sha;
+        }
+      }
       if (!checkpoint?.task || ['DONE', 'IDLE'].includes(checkpoint.status)) {
         const task = select();
         if (!task) { checkpoint = { status: 'IDLE', phase: 'IDLE', configDigest }; save(); event('NO_ELIGIBLE_TASK', { blockedTasks: backlog().tasks.filter(hasBlocker).map((t) => t.id) }); return; }
@@ -863,6 +876,7 @@ async function run(resume) {
         const released = await afterCompleted(root, checkpoint, config.checks);
         event('RELEASE_HANDOFF', released);
         if (!released.ok) { process.exitCode = 1; return; } // Preserve the completed development checkpoint.
+        handoffSha = released.sha;
       }
       if (quotaResume) { event('QUOTA_RECOVERY_TASK_DONE'); return; }
       // Continue the next eligible task without an IDE-to-IDE message.

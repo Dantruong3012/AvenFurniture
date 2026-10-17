@@ -1,5 +1,6 @@
 {
   "enabled": false,
+  "developmentPushEnabled": true,
   "releaseMode": "manual",
   "repository": "Dantruong3012/AvenFurniture",
   "remote": "origin",

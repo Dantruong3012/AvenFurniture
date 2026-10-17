@@ -88,7 +88,7 @@ if (phase === 'implement') {
   }
 
   writeFileSync(join(collab, 'orchestrator.config.json'), JSON.stringify(config, null, 2));
-  writeFileSync(join(collab, 'BACKLOG.md'), '# Backlog\nRoadmap approval: APPROVED\n\n| Task ID | Priority | Dependencies | Owner | Status | Acceptance criteria | Commit hash |\n| --- | --- | --- | --- | --- | --- | --- |\n| t1 | P0 | - | Codex | READY | Create t1.txt | - |\n');
+  writeFileSync(join(collab, 'BACKLOG.md'), '# Backlog\nRoadmap approval: APPROVED\n\n| Task ID | Priority | Dependencies | Owner | Status | Scope approval | Acceptance criteria | Commit hash |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| t1 | P0 | - | Codex | READY | APPROVED | Create t1.txt | - |\n');
   writeFileSync(join(collab, 'STATE.md'), 'Active task: -\nCurrent phase: IDLE\nLast completed task: -\nNext task: t1\nBlockers: -\nLast successful commit: -\n');
   mkdirSync(join(collab, 'tasks/t1'), { recursive: true });
   writeFileSync(join(collab, 'tasks/t1/IMPLEMENTATION.md'), '# Implementation: t1\n\nStatus: NOT_STARTED\n');

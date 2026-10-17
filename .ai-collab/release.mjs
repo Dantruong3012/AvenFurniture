@@ -19,13 +19,17 @@ export async function afterCompleted(root, checkpoint, checks, options = {}) {
   try {
     const config = configuration(root);
     const evidence = archiveCompleted(root, checkpoint, checks, options.git);
-    if (!config.enabled) return { ok: true, sha: evidence.sha, pushed: false };
+    if (!config.enabled && !config.developmentPushEnabled) return { ok: true, sha: evidence.sha, pushed: false };
+    const save = options.save ?? store(root);
+    if (!config.enabled) {
+      const pushed = pushCompleted({ root, config, evidence, checks, git: options.git, save });
+      return { ok: true, sha: evidence.sha, pushed: true, remoteBranch: pushed.remoteBranch, remoteSha: pushed.remoteSha, productionDeployment: false, automaticMerge: false };
+    }
     const token = options.token ?? process.env.VERCEL_TOKEN;
     if (!token) throw new Error('Vercel credential unavailable for Preview verification');
     const { createVercelClient } = await import('./release-vercel.mjs');
     const client = options.client ?? createVercelClient({ token, projectId: config.vercelProjectId,
       teamId: config.vercelTeamId, timeoutMs: config.timeoutMs });
-    const save = options.save ?? store(root);
     const pushed = await preflightAndPush({ root, config, evidence, checks, git: options.git, save, client });
     const ready = await trackPreview({ config, pushed, token, save, client });
     return { ok: true, sha: evidence.sha, pushed: true, preview: ready.stage, deploymentId: ready.deploymentId };
@@ -75,21 +79,25 @@ export async function releaseCommand(root, action) {
   const path = join(root, '.ai-collab/.runtime/releases', `${sha}.json`);
   const evidencePath = join(root, '.ai-collab/.runtime/completed', `${sha}.json`);
   if (action === 'release-status') {
-    console.log(JSON.stringify({ enabled: config.enabled, releaseMode: config.releaseMode, localSha: sha, evidenceAvailable: existsSync(evidencePath), release: existsSync(path) ? read(path) : null, nextAction: !config.enabled ? 'Disabled; complete milestone review and activation gates' : 'release-push requires completed evidence at HEAD' }, null, 2));
+    console.log(JSON.stringify({ enabled: config.enabled, developmentPushEnabled: config.developmentPushEnabled === true, releaseMode: config.releaseMode, localSha: sha, evidenceAvailable: existsSync(evidencePath), release: existsSync(path) ? read(path) : null, nextAction: !config.enabled && !config.developmentPushEnabled ? 'Disabled; complete milestone review and activation gates' : 'release-push requires completed evidence at HEAD' }, null, 2));
     return;
   }
   if (action === 'doctor') {
-    console.log(JSON.stringify({ branch: git('branch', '--show-current'), expectedBranch: config.developmentBranch, repository: config.repository, clean: !git('status', '--porcelain=v1'), enabled: config.enabled, releaseMode: config.releaseMode, completionEvidence: existsSync(evidencePath), githubApiCredentialAvailable: Boolean(process.env.GH_TOKEN || process.env.GITHUB_TOKEN), vercelCredentialAvailable: Boolean(process.env.VERCEL_TOKEN), branchProtection: 'requires live API verification in M4', productionBranchTracking: 'requires live Vercel verification in M2', productionReleaseImplemented: false }, null, 2));
+    console.log(JSON.stringify({ branch: git('branch', '--show-current'), expectedBranch: config.developmentBranch, repository: config.repository, clean: !git('status', '--porcelain=v1'), enabled: config.enabled, developmentPushEnabled: config.developmentPushEnabled === true, releaseMode: config.releaseMode, completionEvidence: existsSync(evidencePath), githubApiCredentialAvailable: Boolean(process.env.GH_TOKEN || process.env.GITHUB_TOKEN), vercelCredentialAvailable: Boolean(process.env.VERCEL_TOKEN), branchProtection: 'requires live API verification in M4', productionBranchTracking: 'requires live Vercel verification in M2', productionReleaseImplemented: false }, null, 2));
     return;
   }
   if (action !== 'release-push') throw new Error('Unknown release command');
-  if (!config.enabled) throw new Error('Release automation is disabled');
+  if (!config.enabled && !config.developmentPushEnabled) throw new Error('Development push is disabled');
   const lock = join(root, '.ai-collab/.lock');
   acquireLock(lock, true);
   try {
     if (!existsSync(evidencePath)) throw new Error('No durable completed receipt at HEAD; legacy Markdown approval is insufficient');
     const checks = read(join(root, '.ai-collab/orchestrator.config.json')).checks;
     const save = store(root);
+    if (!config.enabled) {
+      console.log(JSON.stringify(pushCompleted({ root, config, evidence: read(evidencePath), checks, git, save })));
+      return;
+    }
     if (!process.env.VERCEL_TOKEN) throw new Error('Vercel credential unavailable for Preview verification');
     const { createVercelClient } = await import('./release-vercel.mjs');
     const client = createVercelClient({ token: process.env.VERCEL_TOKEN, projectId: config.vercelProjectId,

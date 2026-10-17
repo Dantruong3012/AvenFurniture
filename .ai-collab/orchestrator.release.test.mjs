@@ -240,6 +240,33 @@ test('completion archive is immutable and legacy/incomplete checkpoint cannot au
     assert.equal(existsSync(join(f.root, '.ai-collab/.runtime/checkpoint.json')), false);
   } finally { f.cleanup(); }
 });
+test('dev-only handoff pushes and verifies exact remote SHA without Vercel or Production release', async () => {
+  const f = fixture({ ...policy, enabled: false, developmentPushEnabled: true });
+  try {
+    const result = await afterCompleted(f.root, f.checkpoint, checks, { git: f.git });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.pushed, true);
+    assert.equal(result.remoteBranch, policy.developmentBranch);
+    assert.equal(result.remoteSha, f.sha);
+    assert.equal(result.productionDeployment, false);
+    assert.equal(result.automaticMerge, false);
+    assert.equal(f.realGit('ls-remote', '--heads', 'origin', policy.developmentBranch).split(/\s+/)[0], f.sha);
+    const receipt = JSON.parse(readFileSync(join(f.root, '.ai-collab/.runtime/releases', `${f.sha}.json`), 'utf8'));
+    assert.equal(receipt.stage, 'PUSHED');
+    assert.equal(receipt.remote, 'origin');
+    assert.equal(receipt.remoteBranch, policy.developmentBranch);
+    assert.equal(receipt.remoteSha, f.sha);
+    assert.equal(f.states.length, 0);
+  } finally { f.cleanup(); }
+});
+test('dev-only push policy rejects any other target branch and missing completion approval', () => {
+  const f = fixture({ ...policy, enabled: false, developmentPushEnabled: true });
+  try {
+    assert.throws(() => pushCompleted({ ...f.options, config: { ...f.options.config, developmentPushEnabled: true, developmentBranch: 'dev/other' } }), /Invalid or unsupported release policy/);
+    assert.throws(() => pushCompleted({ ...f.options, evidence: { ...f.options.evidence, checkpoint: { ...f.checkpoint, reviewReceipt: null } } }), /Invalid completion evidence|Missing genuine/);
+    assert.equal(f.realGit('ls-remote', '--heads', 'origin', policy.developmentBranch), '');
+  } finally { f.cleanup(); }
+});
 test('automatic coordinator handoff awaits Preview before returning success', async () => {
   const f = fixture({ ...vercelPolicy, enabled: true }); try {
     const lock = join(f.root, '.ai-collab/.lock');

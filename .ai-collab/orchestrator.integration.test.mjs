@@ -12,6 +12,8 @@ function fixture(mode = 'success', second = false) {
   const dir = mkdtempSync(join(tmpdir(), 'aven-runner-test-'));
   const collab = join(dir, '.ai-collab'); mkdirSync(collab);
   for (const name of ['workflow.mjs', 'orchestrator.mjs', 'orchestrator-core.mjs', 'release.mjs', 'release-git.mjs', 'release.config.json', '.gitignore']) copyFileSync(join(source, name), join(collab, name));
+  const fixtureReleasePath = join(collab, 'release.config.json');
+  writeFileSync(fixtureReleasePath, JSON.stringify({ ...JSON.parse(readFileSync(fixtureReleasePath, 'utf8')), enabled: false, developmentPushEnabled: false }));
   writeFileSync(join(dir, 'AGENTS.md'), 'Isolated deterministic coordinator test.');
   writeFileSync(join(dir, 'scenario.json'), JSON.stringify({ mode }));
   if (mode === 'architecture-block') writeFileSync(join(dir, 'package.json'), JSON.stringify({ scripts: { lint: 'eslint', test: 'node --test' } }));
@@ -77,7 +79,7 @@ if(agy&&['stream-interrupt','stream-always'].includes(mode)&&phase==='review'&&(
 if(agy)console.log(JSON.stringify({status:'SUCCESS',structured_output:result,usage:{input_tokens:35000,output_tokens:100,total_tokens:35100}}));else {writeFileSync(args[args.indexOf('-o')+1],JSON.stringify(result));console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:120,output_tokens:45,total_tokens:165}}));}
 `);
   writeFileSync(join(collab, 'orchestrator.config.json'), JSON.stringify({ antigravity: [process.execPath, join(dir, 'fake.mjs')], codex: [process.execPath, join(dir, 'fake.mjs')], timeoutMs: 10000, maxRounds: 3, checks: [[process.execPath, 'verify.mjs']] }));
-  writeFileSync(join(collab, 'BACKLOG.md'), '# Backlog\nRoadmap approval: APPROVED\n\n| Task ID | Priority | Dependencies | Owner | Status | Acceptance criteria | Commit hash |\n| --- | --- | --- | --- | --- | --- | --- |\n| t1 | P0 | - | Codex | READY | Create t1.txt | - |\n'+(second?'| t2 | P0 | t1 | Codex | READY | Create t2.txt | - |\n':''));
+  writeFileSync(join(collab, 'BACKLOG.md'), '# Backlog\nRoadmap approval: APPROVED\n\n| Task ID | Priority | Dependencies | Owner | Status | Scope approval | Acceptance criteria | Commit hash |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| t1 | P0 | - | Codex | READY | APPROVED | Create t1.txt | - |\n'+(second?'| t2 | P0 | t1 | Codex | READY | APPROVED | Create t2.txt | - |\n':''));
   writeFileSync(join(collab, 'STATE.md'), 'Active task: -\nCurrent phase: IDLE\nLast completed task: -\nNext task: t1\nBlockers: -\nLast successful commit: -\n');
   mkdirSync(join(collab,'tasks/t1'),{recursive:true});writeFileSync(join(collab,'tasks/t1/IMPLEMENTATION.md'),'# Implementation: t1\n\nStatus: NOT_STARTED\n');
   for(const args of [['init','-q'],['config','user.name','Fixture'],['config','user.email','fixture@example.com'],['add','.'],['commit','-qm','Fixture baseline']]) assert.equal(spawnSync('git',args,{cwd:dir}).status,0);
@@ -101,6 +103,53 @@ test('release module failure preserves completed development checkpoint and arti
     assert.equal(c.phase, 'COMMITTED');
     assert.equal(gitCall(dir, 'status', '--porcelain'), '');
     assert.match(readFileSync(join(dir, '.ai-collab/BACKLOG.md'), 'utf8'), /DONE/);
+  } finally { rmSync(dir, { recursive: true }); }
+});
+test('unapproved READY and BACKLOG rows never start Planning despite global roadmap approval', async () => {
+  for (const status of ['READY', 'BACKLOG']) {
+    const dir = fixture();
+    try {
+      const path = join(dir, '.ai-collab/BACKLOG.md');
+      writeFileSync(path, readFileSync(path, 'utf8').replace('| Codex | READY | APPROVED |', `| Codex | ${status} | NEEDS_DECISION |`));
+      gitCall(dir, 'add', '.ai-collab/BACKLOG.md');
+      gitCall(dir, 'commit', '-qm', 'fixture unapproved scope');
+      const result = await run(dir);
+      assert.equal(result.code, 0, result.output);
+      assert.match(result.output, /NO_ELIGIBLE_TASK/);
+      assert.equal(existsSync(join(dir, 't1.txt')), false);
+    } finally { rmSync(dir, { recursive: true }); }
+  }
+});
+test('legacy row without task scope approval is rejected before any agent turn', async () => {
+  const dir = fixture();
+  try {
+    const path = join(dir, '.ai-collab/BACKLOG.md');
+    writeFileSync(path, readFileSync(path, 'utf8').replace('| Codex | READY | APPROVED |', '| Codex | READY |'));
+    gitCall(dir, 'add', '.ai-collab/BACKLOG.md');
+    gitCall(dir, 'commit', '-qm', 'fixture missing scope');
+    const result = await run(dir);
+    assert.equal(result.code, 1);
+    assert.match(result.output, /Invalid BACKLOG row/);
+    assert.equal(existsSync(join(dir, 't1.txt')), false);
+  } finally { rmSync(dir, { recursive: true }); }
+});
+test('pending development push is reconciled before selecting another task', async () => {
+  const dir = fixture('success', true);
+  try {
+    const policyPath = join(dir, '.ai-collab/release.config.json');
+    writeFileSync(policyPath, JSON.stringify({ ...JSON.parse(readFileSync(policyPath, 'utf8')), developmentPushEnabled: true }));
+    writeFileSync(join(dir, '.ai-collab/release.mjs'), 'throw new Error("fixture pending push");\n');
+    gitCall(dir, 'add', '.ai-collab/release.config.json', '.ai-collab/release.mjs');
+    gitCall(dir, 'commit', '-qm', 'fixture pending push');
+    const first = await run(dir);
+    assert.equal(first.code, 1);
+    assert.match(first.output, /fixture pending push/);
+    assert.equal(existsSync(join(dir, 't1.txt')), true);
+    assert.equal(existsSync(join(dir, 't2.txt')), false);
+    const second = await run(dir);
+    assert.equal(second.code, 1);
+    assert.match(second.output, /fixture pending push/);
+    assert.equal(existsSync(join(dir, 't2.txt')), false);
   } finally { rmSync(dir, { recursive: true }); }
 });
 function reviewedUpgrade(dir,status='APPROVED'){

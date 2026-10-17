@@ -73,11 +73,11 @@ try {
     const local = inspectLocal(root, backlog(), config, quotaReady);
     const rights = await inspectRights(config);
     const release = JSON.parse(readFileSync(join(workspace, 'release.config.json'), 'utf8'));
-    const status = { phase: 'PREFLIGHT', local, rights, smokeVerified: smokeVerified(), smokeFailed: smokeFailed(), quota: quota(), developmentOnly: !release.enabled, automaticMerge: false, productionDeployment: false };
+    const status = { phase: 'PREFLIGHT', local, rights, smokeVerified: smokeVerified(), smokeFailed: smokeFailed(), quota: quota(), developmentOnly: !release.enabled, developmentPushEnabled: release.developmentPushEnabled === true, automaticMerge: false, productionDeployment: false };
     report(status);
     if (action === '--check') process.exitCode = 0;
     else if (!['RUN', 'RESUME', 'COMPLETE'].includes(local.status)) process.exitCode = 2;
-    else if (local.status === 'COMPLETE') report({ phase: 'COMPLETE', tasks: 'all approved backlog tasks done' });
+    else if (local.status === 'COMPLETE' && release.developmentPushEnabled !== true) report({ phase: 'COMPLETE', tasks: 'all approved backlog tasks done' });
     else {
       if (release.enabled && !releasePrerequisites(rights)) throw new Error('Release gate lacks verified provider identity or protected main branch');
       if (!existsSync(join(root, '.env.local'))) throw new Error('Expected local environment file is absent');
