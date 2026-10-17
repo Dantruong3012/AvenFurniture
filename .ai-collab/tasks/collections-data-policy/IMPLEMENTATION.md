@@ -3,7 +3,7 @@
 Status: READY_FOR_REVIEW
 Changed paths: lib/types.ts, lib/validation/catalog.ts, lib/catalog/queries.ts, lib/catalog/public.ts, app/collections/page.tsx, tests/catalog.test.mjs
 Commit: feat(collections-data-policy): implement approved task
-Commit hash: -
+Commit hash: 8d1254f8dfb32e8cbda10bee6b510b09da7d4ecf
 
 Defined collection taxonomy, exact category slug association rules, and collection filter parsing. Collection cards now link to matching product categories.
 
