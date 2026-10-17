@@ -3,7 +3,7 @@
 Status: READY_FOR_REVIEW
 Changed paths: lib/data/editorial.ts, lib/types.ts, tests/journal-policy.test.mjs
 Commit: feat(journal-content-policy): implement approved task
-Commit hash: -
+Commit hash: afc537e3ca750bdee2f9719f058533a00822389c
 
 Implemented the journal content policy, local Markdown frontmatter validation, editorial ownership fields, SEO metadata, and Zalo CTA contract.
 
