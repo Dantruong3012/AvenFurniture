@@ -1,7 +1,7 @@
 # Workflow state
 
-Active task: -
-Current phase: IDLE
+Active task: release-m6-production-tracking
+Current phase: APPROVED
 Last completed task: release-m5-controlled-merge
 Next task: -
 Blockers: -
