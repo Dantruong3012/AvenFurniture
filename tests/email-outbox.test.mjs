@@ -309,6 +309,19 @@ test("invalid worker options and already-aborted workers never access storage", 
   await assert.rejects(runOutboxWorker({ ...options, signal, pollIntervalMs: 0 }));
 });
 
+test("outbox worker renders typed template payloads before delivery", async (t) => {
+  const fixture = await database(t);
+  const row = await fixture.insert();
+  const mailer = createMockMailer();
+  const result = await dispatchOutboxBatch({ store: fixture.store(), mailer, now: () => epoch,
+    buildMessage: async () => ({ template: "customer_confirmation", data: { to: "customer@example.com", customerName: "Ari", reference: 42,
+      items: [{ name: "Oak table", quantity: 1 }] } }) });
+  assert.deepEqual(result, [{ id: row.id, status: "sent" }]);
+  assert.equal(mailer.deliveries.length, 1);
+  assert.match(mailer.deliveries[0].message.text, /Hello Ari/);
+  assert.match(mailer.deliveries[0].message.html, /Oak table/);
+});
+
 test("database errors are sanitized for listing, claiming and saving", async () => {
   const client = createClient("https://outbox-test.invalid", "test-key", {
     auth: { persistSession: false, autoRefreshToken: false },

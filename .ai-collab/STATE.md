@@ -1,7 +1,7 @@
 # Workflow state
 
-Active task: -
-Current phase: IDLE
+Active task: email-notification-templates
+Current phase: APPROVED
 Last completed task: release-m6-production-tracking
 Next task: -
 Blockers: -

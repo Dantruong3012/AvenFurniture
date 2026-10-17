@@ -1,6 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/lib/supabase/database.types";
+import { renderEmailTemplate } from "./templates";
 import type { DeliveryOutcome, DispatchResult, OutboxLoopOptions, OutboxRecord, OutboxStore, OutboxWorkerOptions, RetryPolicy } from "./types";
 
 const defaultRetry: RetryPolicy = { maxAttempts: 5, baseDelayMs: 1_000, maxDelayMs: 3_600_000 };
@@ -113,9 +114,10 @@ export async function dispatchOutboxBatch(options: OutboxWorkerOptions): Promise
     try {
       const receipt = await Promise.race([
         (async () => {
-          const message = await buildMessage(record, controller.signal);
+          const built = await buildMessage(record, controller.signal);
           controller.signal.throwIfAborted();
           if (now() >= Date.parse(record.locked_until!)) throw new Error("Lease expired.");
+          const message = "template" in built ? renderEmailTemplate(built) : built;
           return mailer.send(message, { idempotencyKey: record.event_id, signal: controller.signal });
         })(),
         new Promise<never>((_, reject) => {

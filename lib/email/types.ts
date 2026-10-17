@@ -3,6 +3,15 @@ import type { Tables } from "@/lib/supabase/database.types";
 export type OutboxRecord = Tables<"email_outbox">;
 export type OutboxStatus = "pending" | "processing" | "sent" | "failed";
 export type EmailMessage = { to: string; subject: string; text: string; html?: string };
+export type InquiryItemEmailData = { name: string; quantity: number; unitPrice?: number | null; currency?: string };
+export type CustomerConfirmationData = { to: string; customerName: string; reference?: string | number; items?: InquiryItemEmailData[] };
+export type ConsultantAssignmentData = { to: string; inquiryId: string; customerName: string; customerEmail?: string | null; customerPhone?: string; notes?: string; adminUrl: string };
+export type StatusUpdateData = { to: string; recipient: "customer" | "staff"; inquiryId: string; customerName: string; status: string; previousStatus?: string; reference?: string | number };
+export type EmailTemplatePayload =
+  | { template: "customer_confirmation"; data: CustomerConfirmationData }
+  | { template: "consultant_assignment"; data: ConsultantAssignmentData }
+  | { template: "status_update"; data: StatusUpdateData };
+export type EmailBuildResult = EmailMessage | EmailTemplatePayload;
 export type DeliveryOptions = { idempotencyKey: string; signal: AbortSignal };
 export type DeliveryReceipt = { messageId: string };
 
@@ -39,7 +48,7 @@ export type DispatchResult = { id: string; status: "sent" | "retry" | "failed" |
 export type OutboxWorkerOptions = {
   store: OutboxStore;
   mailer: Mailer;
-  buildMessage: (record: OutboxRecord, signal: AbortSignal) => Promise<EmailMessage>;
+  buildMessage: (record: OutboxRecord, signal: AbortSignal) => Promise<EmailBuildResult>;
   batchSize?: number;
   leaseMs?: number;
   deliveryTimeoutMs?: number;
