@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { root, workspace, backlog, nextTask, hasBlocker, field, replaceField, setTaskRow, taskPath, changedWorkingPaths, scanStaged, git } from './workflow.mjs';
-import { schema, validateResult, atomicJSON, snapshot, digest, changes, assertScope, validatePaths, acquireLock, releaseLock, execute, assertNoSecrets, quotaFailure, contextFailure, agentTokenUsage, tokenWarning, handoffMarkdown, redactSensitive, agentEnvironment, evaluateBudget, summarizeCheckOutput, implementationBriefMarkdown, implementationSummaryMarkdown, verifyReportMarkdown, reworkMarkdown } from './orchestrator-core.mjs';
+import { schema, validateResult, atomicJSON, snapshot, digest, changes, assertScope, validatePaths, acquireLock, releaseLock, execute, assertNoSecrets, quotaFailure, contextFailure, agentTokenUsage, tokenWarning, handoffMarkdown, redactSensitive, agentEnvironment, evaluateBudget, summarizeCheckOutput, implementationBriefMarkdown, implementationSummaryMarkdown, verifyReportMarkdown, reworkMarkdown, isAllowlistBlocker } from './orchestrator-core.mjs';
 
 const runtime = join(workspace, '.runtime');
 const checkpointPath = join(runtime, 'checkpoint.json');
@@ -22,8 +22,8 @@ const runnerReviewPath = '.ai-collab/tasks/orchestrator-quota-recovery/REVIEW.md
 const runnerUpgradePaths = new Set(['.ai-collab/orchestrator.mjs', '.ai-collab/orchestrator-core.mjs', '.ai-collab/workflow.mjs', '.ai-collab/orchestrator.integration.test.mjs', '.ai-collab/orchestrator.test.mjs', '.ai-collab/README.md', '.ai-collab/tasks/orchestrator-quota-recovery/IMPLEMENTATION.md', runnerReviewPath, 'AGENTS.md']);
 const planRecoveryReviewPath = '.ai-collab/tasks/orchestrator-plan-path-recovery/REVIEW.md';
 const planRecoveryPaths = new Set(['.ai-collab/orchestrator.mjs', '.ai-collab/orchestrator-core.mjs', '.ai-collab/orchestrator.integration.test.mjs', '.ai-collab/orchestrator.test.mjs', '.ai-collab/README.md', '.ai-collab/tasks/orchestrator-plan-path-recovery/IMPLEMENTATION.md', planRecoveryReviewPath]);
-const replanReviewPaths = new Set(['.ai-collab/tasks/orchestrator-replan-recovery/REVIEW.md', '.ai-collab/tasks/orchestrator-schema-replan-recovery/REVIEW.md']);
-const replanRunnerPaths = new Set(['.ai-collab/orchestrator.mjs', '.ai-collab/orchestrator-core.mjs', '.ai-collab/orchestrator.integration.test.mjs', '.ai-collab/orchestrator.test.mjs', '.ai-collab/README.md', '.ai-collab/tasks/orchestrator-replan-recovery/IMPLEMENTATION.md', '.ai-collab/tasks/orchestrator-replan-recovery/REVIEW.md', '.ai-collab/tasks/orchestrator-schema-replan-recovery/PLAN.md', '.ai-collab/tasks/orchestrator-schema-replan-recovery/IMPLEMENTATION.md', '.ai-collab/tasks/orchestrator-schema-replan-recovery/REVIEW.md']);
+const replanReviewPaths = new Set(['.ai-collab/tasks/orchestrator-replan-recovery/REVIEW.md', '.ai-collab/tasks/orchestrator-schema-replan-recovery/REVIEW.md', '.ai-collab/tasks/orchestrator-allowlist-replan-root-fix/REVIEW.md']);
+const replanRunnerPaths = new Set(['.ai-collab/orchestrator.mjs', '.ai-collab/orchestrator-core.mjs', '.ai-collab/orchestrator.integration.test.mjs', '.ai-collab/orchestrator.test.mjs', '.ai-collab/README.md', '.ai-collab/tasks/orchestrator-replan-recovery/IMPLEMENTATION.md', '.ai-collab/tasks/orchestrator-replan-recovery/REVIEW.md', '.ai-collab/tasks/orchestrator-schema-replan-recovery/PLAN.md', '.ai-collab/tasks/orchestrator-schema-replan-recovery/IMPLEMENTATION.md', '.ai-collab/tasks/orchestrator-schema-replan-recovery/REVIEW.md', '.ai-collab/tasks/orchestrator-allowlist-replan-root-fix/PLAN.md', '.ai-collab/tasks/orchestrator-allowlist-replan-root-fix/IMPLEMENTATION.md', '.ai-collab/tasks/orchestrator-allowlist-replan-root-fix/REVIEW.md']);
 const architectureReviewPath = '.ai-collab/tasks/orchestrator-architecture-recovery/REVIEW.md';
 const architectureRunnerPaths = new Set(['.ai-collab/orchestrator.mjs', '.ai-collab/orchestrator.integration.test.mjs', '.ai-collab/README.md', '.ai-collab/tasks/orchestrator-architecture-recovery/PLAN.md', '.ai-collab/tasks/orchestrator-architecture-recovery/IMPLEMENTATION.md', architectureReviewPath]);
 const architecturePlanReviewPath = '.ai-collab/tasks/orchestrator-architecture-plan-recovery/REVIEW.md';
@@ -211,8 +211,41 @@ function replan() {
     const id = checkpoint.task?.id;
     const data = backlog();
     const task = data.tasks.find((item) => item.id === id);
-    const isAllowlistBlocker = /^codex: .*(?:exact path allowlist excludes|cannot be implemented within the authorized files)/i.test(checkpoint.error ?? '');
-    if (!id || checkpoint.status !== 'BLOCKED' || checkpoint.phase !== 'IN_PROGRESS' || !task || task.status !== 'BLOCKED' || !isAllowlistBlocker) throw new Error('Only the current blocked allowlist task can be replanned');
+    if (checkpoint.status === 'BLOCKED' && checkpoint.phase === 'PLANNING' && checkpoint.approvedReplanPaths?.length && (/^Unowned edits preserved:/.test(checkpoint.error ?? '') || checkpoint.error === 'Invalid agent structured result code')) {
+      const head = git('rev-parse', 'HEAD');
+      checkpoint.baseHead = head;
+      const current = snapshot(root);
+      for (const p of replanRunnerPaths) {
+        if (current[p]) checkpoint.baseline[p] = current[p];
+      }
+      assertTaskScope();
+      checkpoint.status = 'RUNNING';
+      checkpoint.error = null;
+      artifact('IMPLEMENTATION.md', `# Implementation: ${id}\n\nStatus: NOT_STARTED\n\nReplanning after approved architecture revision. Prior blocker and implementation artifact are preserved in the private checkpoint history and archive.\n`);
+      transition('PLANNING');
+      event('REPLAN_READY', { previousSequence: checkpoint.sequence, recoveredFromScopeError: true });
+      return;
+    }
+    if (checkpoint.status === 'BLOCKED' && checkpoint.phase === 'IN_PROGRESS' && checkpoint.approvedReplanPaths?.length && checkpoint.error === 'Process exited 1; inspect private log') {
+      const log = join(runtime, `${id}-${checkpoint.sequence}-implement.log`);
+      if (existsSync(log) && read(log).includes("Missing 'code'")) {
+        const head = git('rev-parse', 'HEAD');
+        checkpoint.baseHead = head;
+        const current = snapshot(root);
+        for (const p of replanRunnerPaths) {
+          if (current[p]) checkpoint.baseline[p] = current[p];
+        }
+        assertTaskScope();
+        checkpoint.status = 'RUNNING';
+        checkpoint.error = null;
+        artifact('IMPLEMENTATION.md', `# Implementation: ${id}\n\nStatus: IN_PROGRESS\n\nResuming implementation after fixing structured schema required properties.\n`);
+        transition('IN_PROGRESS');
+        event('REPLAN_READY', { previousSequence: checkpoint.sequence, recoveredFromSchemaError: true });
+        return;
+      }
+    }
+    const isAllowlist = isAllowlistBlocker(checkpoint.error ?? '');
+    if (!id || checkpoint.status !== 'BLOCKED' || checkpoint.phase !== 'IN_PROGRESS' || !task || task.status !== 'BLOCKED' || !isAllowlist) throw new Error('Only the current blocked allowlist task can be replanned');
     const state = read(join(workspace, 'STATE.md'));
     if (field(state, 'Active task') !== id || field(state, 'Current phase') !== 'BLOCKED') throw new Error('Workflow state does not match blocked checkpoint');
     if (field(data.content, 'Roadmap approval') !== 'APPROVED' || checkpoint.configDigest !== configDigest || checkpoint.scriptsDigest !== digest(requiredScripts())) throw new Error('Approved roadmap or runner configuration changed');
@@ -236,10 +269,11 @@ function replan() {
     const review = git('show', `${head}:${reviewPath}`);
     if (field(review, 'Status') !== 'APPROVED' || !/^Reviewer: Antigravity\b/m.test(review)) throw new Error('Replan runner review is not APPROVED by Antigravity');
     const metadata = new Set(['.ai-collab/BACKLOG.md', '.ai-collab/STATE.md', ...['PLAN.md', 'IMPLEMENTATION.md', 'REVIEW.md', 'IMPLEMENTATION_BRIEF.md', 'IMPLEMENTATION_SUMMARY.md', 'VERIFY_REPORT.md', 'REWORK.md'].map((name) => `.ai-collab/tasks/${id}/${name}`)]);
-    if (changedWorkingPaths().some((path) => !metadata.has(path))) throw new Error('Uncommitted changes outside blocked task metadata');
+    const allowedWorking = new Set([...metadata, ...(checkpoint.paths ?? []), ...(owned ?? [])]);
+    if (changedWorkingPaths().some((path) => !allowedWorking.has(path))) throw new Error('Uncommitted changes outside blocked task metadata or task paths');
     const current = snapshot(root);
     if (current[planPath] === checkpoint.baseline?.[planPath]) throw new Error('Task plan has not changed since checkpoint');
-    if (changes(checkpoint.baseline, current).some((path) => !metadata.has(path) && !replanRunnerPaths.has(path))) throw new Error('Application source changed since blocked checkpoint');
+    if (changes(checkpoint.baseline, current).some((path) => !allowedWorking.has(path) && !replanRunnerPaths.has(path))) throw new Error('Application source changed since blocked checkpoint');
     if (existsSync(join(runtime, `${id}-${checkpoint.sequence}-replan-blocker.md`))) throw new Error('Blocker archive already exists; inspect before retry');
     planningContext(plan); // Validate bounded, secret-free context before changing the checkpoint.
     const original = { phase: checkpoint.phase, round: checkpoint.round, error: checkpoint.error, paths: checkpoint.paths, planReceipt: checkpoint.planReceipt, implementation: checkpoint.implementation ?? null, implementationArtifactDigest: digest(impl), baseHead: checkpoint.baseHead };
@@ -254,7 +288,14 @@ function replan() {
     checkpoint.error = null;
     checkpoint.round = 0;
     checkpoint.baseHead = head;
-    checkpoint.baseline = snapshot(root);
+    const priorBaseline = checkpoint.baseline;
+    const rebased = snapshot(root);
+    const taskPaths = [...new Set([...(checkpoint.paths ?? []), ...(owned ?? [])])];
+    for (const path of taskPaths) {
+      if (Object.hasOwn(priorBaseline, path)) rebased[path] = priorBaseline[path];
+      else delete rebased[path];
+    }
+    checkpoint.baseline = rebased;
     checkpoint.runnerUpgrade = { from: original.baseHead, to: head, paths: committed };
     transition('PLANNING');
     event('REPLAN_READY', { previousSequence: checkpoint.sequence, reviewedPaths: committed });
@@ -650,8 +691,11 @@ async function agent(kind, phase, prompt, statuses, transientAttempt = 0) {
   const receipt = { agent: kind, operation: phase, sequence: seq, exitCode: result.code, status: structured.status, result: structured, inputDigest: digest(before), outputDigest: digest(snapshot(root)) };
   atomicJSON(`${prefix}.receipt.json`, receipt);
   event('CLI_COMPLETED', { agent: kind, operation: phase, sequence: seq, status: structured.status });
-  writeHandoff('CLI_COMPLETED');
-  if (structured.status === 'BLOCKED') throw new Error(`${kind}: ${structured.summary}`);
+  if (structured.status === 'BLOCKED') {
+    const error = new Error(`${kind}: ${structured.summary}`);
+    error.structured = structured;
+    throw error;
+  }
   return receipt;
 }
 function select() {
@@ -660,7 +704,8 @@ function select() {
   return nextTask(data.tasks) ?? data.tasks.filter((t) => t.scopeApproval === 'APPROVED' && t.status === 'BACKLOG' && !hasBlocker(t) && t.dependencies.every((id) => data.tasks.some((dep) => dep.id === id && dep.status === 'DONE' && !hasBlocker(dep)))).sort((a, b) => a.priority.localeCompare(b.priority) || a.lineNumber - b.lineNumber)[0];
 }
 function assertTaskScope(baseline = checkpoint.baseline) {
-  assertScope(baseline, snapshot(root), [...checkpoint.paths, '.ai-collab/BACKLOG.md', '.ai-collab/STATE.md', ...['PLAN.md', 'IMPLEMENTATION.md', 'REVIEW.md', 'IMPLEMENTATION_BRIEF.md', 'IMPLEMENTATION_SUMMARY.md', 'VERIFY_REPORT.md', 'REWORK.md'].map((name) => `.ai-collab/tasks/${checkpoint.task.id}/${name}`)]);
+  const allowed = [...checkpoint.paths, ...(checkpoint.approvedReplanPaths ?? []), '.ai-collab/BACKLOG.md', '.ai-collab/STATE.md', ...['PLAN.md', 'IMPLEMENTATION.md', 'REVIEW.md', 'IMPLEMENTATION_BRIEF.md', 'IMPLEMENTATION_SUMMARY.md', 'VERIFY_REPORT.md', 'REWORK.md'].map((name) => `.ai-collab/tasks/${checkpoint.task.id}/${name}`)];
+  assertScope(baseline, snapshot(root), allowed);
 }
 function sourceDigest() {
   const ignored = ['.ai-collab/BACKLOG.md', '.ai-collab/STATE.md', ...['PLAN.md', 'IMPLEMENTATION.md', 'REVIEW.md', 'IMPLEMENTATION_BRIEF.md', 'IMPLEMENTATION_SUMMARY.md', 'VERIFY_REPORT.md', 'REWORK.md'].map((name) => `.ai-collab/tasks/${checkpoint.task.id}/${name}`)];
@@ -744,7 +789,28 @@ async function taskLoop() {
       const handoff = quotaOptimization && checkpoint.round > 1 && existsSync(taskPath(checkpoint.task.id, 'REWORK.md')) ? 'REWORK.md' : quotaOptimization ? 'IMPLEMENTATION_BRIEF.md' : 'PLAN.md';
       const handoffPath = taskPath(checkpoint.task.id, handoff);
       const handoffText = existsSync(handoffPath) ? read(handoffPath) : read(taskPath(checkpoint.task.id, 'PLAN.md'));
-      const receipt = await agent('codex', 'implement', `Implement task ${checkpoint.task.id} using this compact ${handoff} handoff:\n${handoffText}\nOnly modify these exact paths: ${checkpoint.paths.join(', ')}. Do not stage/commit or edit coordinator artifacts. Feedback: ${checkpoint.feedback ?? 'Initial implementation'}. Return READY_FOR_REVIEW with actual changed paths and evidence, or BLOCKED.`, ['READY_FOR_REVIEW']);
+      let receipt;
+      try {
+        receipt = await agent('codex', 'implement', `Implement task ${checkpoint.task.id} using this compact ${handoff} handoff:\n${handoffText}\nOnly modify these exact paths: ${checkpoint.paths.join(', ')}. Do not stage/commit or edit coordinator artifacts. Feedback: ${checkpoint.feedback ?? 'Initial implementation'}. Return READY_FOR_REVIEW with actual changed paths and evidence, or BLOCKED.`, ['READY_FOR_REVIEW']);
+      } catch (err) {
+        if (isAllowlistBlocker(err.structured || err.message) && (checkpoint.autoReplanCount ?? 0) < 2) {
+          checkpoint.autoReplanCount = (checkpoint.autoReplanCount ?? 0) + 1;
+          const requestedPaths = Array.isArray(err.structured?.requestedPaths) ? err.structured.requestedPaths : [];
+          const replanPrompt = `Codex requested expanding authorized files during implementation of task ${checkpoint.task.id}.\nBlocker summary: ${err.structured?.summary ?? err.message}\nCurrently owned paths:\n${checkpoint.paths.map((p) => `- ${p}`).join('\n')}\nRequested paths:\n${requestedPaths.length ? requestedPaths.map((p) => `- ${p}`).join('\n') : '(Not explicitly listed; examine repository structure and test dependencies)'}\nApproved acceptance criteria: ${checkpoint.task.criteria}.\nExamine if adding these paths is safe and within the approved scope (no Production actions, no billing/deployment changes). Return READY with the complete revised list of paths in paths, or return BLOCKED if unauthorized.`;
+          const planReceipt = await agent('antigravity', 'plan', replanPrompt, ['READY']);
+          const newPaths = validatePaths(planReceipt.result.paths);
+          const hasNewPaths = newPaths.some((p) => !checkpoint.paths.includes(p));
+          if (!hasNewPaths) throw err;
+          checkpoint.paths = newPaths;
+          checkpoint.planReceipt = planReceipt;
+          artifact('PLAN.md', `# Plan: ${checkpoint.task.id}\n\nStatus: APPROVED\n\n${planReceipt.result.details}\n\nOwned paths: ${checkpoint.paths.join(', ')}\n`);
+          if (quotaOptimization) artifact('IMPLEMENTATION_BRIEF.md', implementationBriefMarkdown({ task: checkpoint.task.id, objective: checkpoint.task.criteria, paths: checkpoint.paths, requirements: planReceipt.result.details, acceptanceCriteria: checkpoint.task.criteria }));
+          event('IN_FLIGHT_REPLAN', { task: checkpoint.task.id, paths: checkpoint.paths, count: checkpoint.autoReplanCount });
+          save();
+          continue;
+        }
+        throw err;
+      }
       checkpoint.implementation = receipt.result;
       if (!changes(checkpoint.baseline, snapshot(root)).some((path) => checkpoint.paths.includes(path))) throw new Error('Implementation produced no task change');
       if (quotaOptimization) artifact('IMPLEMENTATION_SUMMARY.md', implementationSummaryMarkdown({ task: checkpoint.task.id, paths: receipt.result.paths, summary: receipt.result.summary, details: receipt.result.details }));

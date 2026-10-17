@@ -4,7 +4,24 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
-import { validateResult, validatePaths, assertScope, snapshot, acquireLock, atomicJSON, execute, quotaFailure, contextFailure, agentTokenUsage, tokenWarning, handoffMarkdown, evaluateBudget, summarizeCheckOutput, implementationBriefMarkdown, implementationSummaryMarkdown, verifyReportMarkdown, reworkMarkdown } from './orchestrator-core.mjs';
+import { validateResult, validatePaths, assertScope, snapshot, acquireLock, atomicJSON, execute, quotaFailure, contextFailure, agentTokenUsage, tokenWarning, handoffMarkdown, evaluateBudget, summarizeCheckOutput, implementationBriefMarkdown, implementationSummaryMarkdown, verifyReportMarkdown, reworkMarkdown, isAllowlistBlocker } from './orchestrator-core.mjs';
+
+test('structured allowlist blocker contract and recognition', () => {
+  const valid = { status: 'BLOCKED', summary: 'Missing test path', paths: [], details: 'Need test file', code: 'ALLOWLIST_EXCLUDED', requestedPaths: ['tests/database.test.mjs'] };
+  assert.equal(validateResult(valid, ['BLOCKED']), valid);
+  assert.throws(() => validateResult({ ...valid, code: 123 }, ['BLOCKED']));
+  assert.throws(() => validateResult({ ...valid, requestedPaths: 'not-array' }, ['BLOCKED']));
+  assert.throws(() => validateResult({ ...valid, requestedPaths: [123] }, ['BLOCKED']));
+
+  assert.equal(isAllowlistBlocker(valid), true);
+  assert.equal(isAllowlistBlocker({ code: 'ALLOWLIST_EXCLUDED' }), true);
+  assert.equal(isAllowlistBlocker('codex: Implemented the newsletter data policy in all six authorized files, but the full test suite cannot pass within the file allowlist.'), true);
+  assert.equal(isAllowlistBlocker('The exact path allowlist excludes the existing cart and product integration points. No files changed.'), true);
+  assert.equal(isAllowlistBlocker('Transactional inquiry change events cannot be implemented within the authorized files and existing database schema.'), true);
+  assert.equal(isAllowlistBlocker('codex: The approved plan requires statuses incompatible with the existing database constraint; resolution exceeds the authorized paths.'), false);
+  assert.equal(isAllowlistBlocker('Syntax error in file'), false);
+  assert.equal(isAllowlistBlocker(null), false);
+});
 
 test('classify quota separately from implementation and architecture failures', () => {
   const quota = quotaFailure('AGY_ERROR: RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 30h29m49s.', Date.UTC(2026, 9, 16));

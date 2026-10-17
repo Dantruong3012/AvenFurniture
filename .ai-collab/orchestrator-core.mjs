@@ -8,11 +8,28 @@ export const schema = {
   properties: {
     status: { type: 'string', enum: ['READY', 'READY_FOR_REVIEW', 'APPROVED', 'CHANGES_REQUESTED', 'COMMIT_REQUESTED', 'BLOCKED'] },
     summary: { type: 'string' }, paths: { type: 'array', description: 'For Planning, exact application source, test, and local migration paths only. Lifecycle artifacts under .ai-collab/ are coordinator-owned and must be omitted.', items: { type: 'string' } }, details: { type: 'string' },
-  }, required: ['status', 'summary', 'paths', 'details'],
+    code: { type: 'string', description: 'Optional machine-readable error or blocker code, e.g. ALLOWLIST_EXCLUDED.' },
+    requestedPaths: { type: 'array', description: 'Optional list of additional paths requested when blocked by allowlist.', items: { type: 'string' } },
+  }, required: ['status', 'summary', 'paths', 'details', 'code', 'requestedPaths'],
 };
 export function validateResult(value, allowed) {
   if (!value || !allowed.includes(value.status) || typeof value.summary !== 'string' || !value.summary.trim() || typeof value.details !== 'string' || !Array.isArray(value.paths) || value.paths.some((p) => typeof p !== 'string')) throw new Error('Invalid agent structured result');
+  if (value.code !== undefined && typeof value.code !== 'string') throw new Error('Invalid agent structured result code');
+  if (value.requestedPaths !== undefined && (!Array.isArray(value.requestedPaths) || value.requestedPaths.some((p) => typeof p !== 'string'))) throw new Error('Invalid agent structured result requestedPaths');
   return value;
+}
+export function isAllowlistBlocker(structuredOrError) {
+  if (!structuredOrError) return false;
+  if (typeof structuredOrError === 'object' && structuredOrError.code === 'ALLOWLIST_EXCLUDED') return true;
+  const text = typeof structuredOrError === 'string'
+    ? structuredOrError
+    : typeof structuredOrError.summary === 'string'
+      ? structuredOrError.summary
+      : typeof structuredOrError.message === 'string'
+        ? structuredOrError.message
+        : '';
+  if (/incompatible with the existing database constraint/i.test(text)) return false;
+  return /(?:exact path allowlist excludes|cannot be implemented within the authorized files|cannot pass within the file allowlist|file allowlist|allowlist excludes|outside (?:the )?authorized files)/i.test(text);
 }
 export function atomicJSON(path, value) {
   writeFileSync(`${path}.tmp`, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });

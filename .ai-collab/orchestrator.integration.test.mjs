@@ -25,7 +25,7 @@ process.chdir(dirname(fileURLToPath(import.meta.url)));
 const args=process.argv.slice(2), mode=JSON.parse(readFileSync('scenario.json')).mode;
 const agy=args.includes('-p'); let prompt=agy?args[args.indexOf('-p')+1]:await new Promise(resolve=>{let s='';process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>resolve(s));});
 if(agy&&invocationCwd===process.cwd())process.exit(9);
-const phase=agy?(prompt.includes('Plan task')?'plan':'review'):(prompt.includes('Request the coordinator')?'commit':'implement');
+const phase=agy?((prompt.includes('Plan task')||prompt.includes('expanding authorized files'))?'plan':'review'):(prompt.includes('Request the coordinator')?'commit':'implement');
 const id=(prompt.match(/(?:Plan task|Review task|Implement task) (t[12])/i)||[])[1] || 't1';
 if(agy&&phase==='plan'&&prompt.includes('Repository tracked files'))process.exit(7);
 if(agy&&phase==='review'&&prompt.includes('Review task')&&(!prompt.includes('NEW FILES')||!prompt.includes('verified')||prompt.includes('CURRENT FILES')))process.exit(7);
@@ -42,6 +42,9 @@ if(agy&&phase==='plan'&&mode==='replan-block'&&prompt.includes('Revised fixture 
   if(!prompt.includes('app/cart/page.tsx')||!prompt.includes('Existing tracked application and test paths'))process.exit(7);
   result.paths=existsSync('.ai-collab/.runtime/wrong-replan-paths')?['src/cart/page.tsx']:['t1.txt','app/cart/page.tsx','components/forms/contact-form.tsx'];
 }
+if(agy&&phase==='plan'&&mode==='inflight-replan'&&prompt.includes('Codex requested expanding authorized files')){
+  result.paths=['t1.txt','extra.txt']; result.status='READY';
+}
 if(phase==='implement'&&(mode==='codex-quota-always'||mode==='codex-quota-once'&&!existsSync('.ai-collab/.runtime/codex-quota-seen'))){
   writeFileSync('.ai-collab/.runtime/codex-quota-seen','yes');
   writeFileSync(id+'.txt','partial');
@@ -56,6 +59,11 @@ if(phase==='implement') {
   if(mode==='replan-block'&&!existsSync('.ai-collab/.runtime/replan-once')){
     writeFileSync('.ai-collab/.runtime/replan-once','yes');
     result.status='BLOCKED';result.summary='The exact path allowlist excludes the existing cart and product integration points. No files changed.';
+  } else
+  if(mode==='inflight-replan'&&!existsSync('.ai-collab/.runtime/inflight-once')){
+    writeFileSync('.ai-collab/.runtime/inflight-once','yes');
+    result.status='BLOCKED';result.summary='The file allowlist excludes extra.txt which is required for testing.';
+    result.code='ALLOWLIST_EXCLUDED';result.requestedPaths=['extra.txt'];
   } else {
   if(mode==='stop-resume'&&!existsSync('.ai-collab/.runtime/delayed')){writeFileSync('.ai-collab/.runtime/delayed','yes');await new Promise(r=>setTimeout(r,2500));}
   writeFileSync(id+'.txt','verified'); result.status='READY_FOR_REVIEW';
@@ -580,6 +588,31 @@ test('replan supports schema and authorized files blocker via orchestrator-schem
   gitCall(dir,'commit','-qm','fix(orchestrator): reviewed schema replan runner');
   const recovered=await run(dir,'replan');assert.equal(recovered.code,0,recovered.output);
   assert.equal(checkpoint(dir).phase,'PLANNING');assert.equal(checkpoint(dir).status,'RUNNING');
+ }finally{rmSync(dir,{recursive:true});}
+});
+test('replan supports allowlist blocker with partial code via orchestrator-allowlist-replan-root-fix',async()=>{
+ const dir=await blockedReplanFixture();try{
+  const cp=checkpoint(dir);
+  cp.error='codex: Implemented the newsletter data policy in all six authorized files, but the full test suite cannot pass within the file allowlist.';
+  writeFileSync(join(dir,'t1.txt'),'partial implementation code\n');
+  writeFileSync(join(dir,'.ai-collab/.runtime/checkpoint.json'),JSON.stringify(cp));
+  writeFileSync(join(dir,'.ai-collab/tasks/t1/IMPLEMENTATION.md'),`# Implementation: t1\n\nStatus: BLOCKED\n\n${cp.error}\n\nSee local checkpoint and logs; preserve all working changes.\n`);
+  revisedFixturePlan(dir);
+  const review=join(dir,'.ai-collab/tasks/orchestrator-allowlist-replan-root-fix/REVIEW.md');mkdirSync(dirname(review),{recursive:true});
+  writeFileSync(review,'# Review: orchestrator-allowlist-replan-root-fix\n\nStatus: APPROVED\nReviewer: Antigravity\n\nReviewed allowlist replan root fix.\n');
+  gitCall(dir,'add','.ai-collab/orchestrator.mjs','.ai-collab/orchestrator-core.mjs','.ai-collab/tasks/orchestrator-allowlist-replan-root-fix/REVIEW.md');
+  gitCall(dir,'commit','-qm','fix(orchestrator): reviewed allowlist replan runner');
+  const recovered=await run(dir,'replan');assert.equal(recovered.code,0,recovered.output);
+  assert.equal(checkpoint(dir).phase,'PLANNING');assert.equal(checkpoint(dir).status,'RUNNING');
+  assert.equal(readFileSync(join(dir,'t1.txt'),'utf8'),'partial implementation code\n');
+ }finally{rmSync(dir,{recursive:true});}
+});
+test('in-flight replan expands allowlist and completes task without operator intervention',async()=>{
+ const dir=fixture('inflight-replan');try{
+  const outcome=await run(dir);
+  assert.equal(outcome.code,0,outcome.output);
+  assert.deepEqual(events(dir).filter(e=>e.phase==='DONE').map(e=>e.task),['t1']);
+  assert.equal(events(dir).filter(e=>e.phase==='IN_FLIGHT_REPLAN').length,1);
  }finally{rmSync(dir,{recursive:true});}
 });
 
