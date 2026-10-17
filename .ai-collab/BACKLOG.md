@@ -19,7 +19,7 @@ Only Antigravity adds tasks from a roadmap approved by the user. Each task also 
 | email-notification-templates | P1 | email-outbox-dispatch | Codex | DONE | APPROVED | Email templates for customer confirmation, consultant assignment and status changes via outbox worker | 4692ce6fadc881bad871abda8fa100cdc23fa94d |
 | inquiry-assignment | P0 | admin-inquiry-portal | Codex | DONE | APPROVED | Assign or unassign active staff in inquiry UI with server validation and audit | 11fbc234bfd797701ef0efb349e24aa932452425 |
 | outbox-operations | P1 | email-outbox-dispatch | Codex | DONE | APPROVED | Worker-level outbox health counts and scoped retry helper with mock tests; admin UI tracked separately | 9a88117698afb8389a1e1307d9c22c61a4dfb84f |
-| outbox-admin-health | P1 | outbox-operations | Codex | APPROVED | APPROVED | Authorized admin sees aggregate outbox health without message body exposure or delivery mutation | - |
+| outbox-admin-health | P1 | outbox-operations | Codex | DONE | APPROVED | Authorized admin sees aggregate outbox health without message body exposure or delivery mutation | 0273768b8ce18a845f8738bb396d15e79af094e1 |
 | outbox-admin-retry | P1 | outbox-admin-health,email-delivery-policy | Codex | BACKLOG | NEEDS_DECISION | Authorized admin can request selected failed-job retries under approved provider and scheduler policy | - |
 | email-event-schema-policy | P1 | - | Antigravity | BACKLOG | NEEDS_DECISION | Approve durable event type and payload model for assignment and status notifications | - |
 | email-change-events | P1 | email-event-schema-policy,inquiry-assignment | Codex | BACKLOG | NEEDS_DECISION | Enqueue assignment and status notifications transactionally without duplicate events | - |
