@@ -1,17 +1,16 @@
 import { createHash, randomBytes } from "node:crypto";
 import { isIP } from "node:net";
-import type { NewsletterConsent, UnsubscribeVerification } from "./types";
+import { normalizeNewsletterEmail, type NewsletterConsent, type UnsubscribeVerification } from "./types";
 
 export const newsletterConsentVersion = "2026-10";
 export const newsletterRetention = Object.freeze({ pendingDays: 30, unsubscribedDays: 90 });
 const tokenPattern = /^[0-9a-f]{64}$/;
-const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+export const newsletterRateLimits = Object.freeze({ perIp: 20, perEmail: 5 });
 
 export function parseNewsletterConsent(input: { email: unknown; accepted: unknown }): NewsletterConsent | null {
   if (input.accepted !== "on" && input.accepted !== true) return null;
-  if (typeof input.email !== "string") return null;
-  const email = input.email.trim().toLowerCase();
-  if (email.length > 254 || !emailPattern.test(email)) return null;
+  const email = normalizeNewsletterEmail(input.email);
+  if (!email) return null;
   return { email, accepted: true, source: "newsletter_form", version: newsletterConsentVersion };
 }
 
@@ -36,10 +35,15 @@ function redactMetadata(value: string): string {
   return createHash("sha256").update(randomBytes(32)).update(value, "utf8").digest("hex");
 }
 
-export function consentMetadataHashes(ipHeader: string | null, userAgent: string | null) {
+export function newsletterRateIdentity(ipHeader: string | null): string {
   const ip = ipHeader?.split(",", 1)[0].trim() ?? "";
+  return isIP(ip) ? ip : "unknown";
+}
+
+export function consentMetadataHashes(ipHeader: string | null, userAgent: string | null) {
+  const ip = newsletterRateIdentity(ipHeader);
   return {
-    ipHash: isIP(ip) ? redactMetadata(ip) : null,
+    ipHash: ip !== "unknown" ? redactMetadata(ip) : null,
     userAgentHash: userAgent && userAgent.length <= 1024 ? redactMetadata(userAgent) : null,
   };
 }

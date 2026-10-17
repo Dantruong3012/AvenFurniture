@@ -3,18 +3,21 @@
 import { headers } from "next/headers";
 import { allowAuthMutation } from "@/lib/auth/mutation";
 import { createServiceClient } from "@/lib/supabase/admin";
-import { consentMetadataHashes, generateUnsubscribeToken, hashUnsubscribeToken, parseNewsletterConsent, verifyUnsubscribeToken } from "./policy";
+import { consentMetadataHashes, generateUnsubscribeToken, hashUnsubscribeToken, newsletterRateIdentity, newsletterRateLimits, parseNewsletterConsent, verifyUnsubscribeToken } from "./policy";
 import type { NewsletterActionState } from "./types";
 
 /** Public opt-in. The same response for new and existing email addresses prevents roster discovery. */
 export async function subscribeNewsletter(_previous: NewsletterActionState, form: FormData): Promise<NewsletterActionState> {
   const consent = parseNewsletterConsent({ email: form.get("email"), accepted: form.get("consent") });
   if (!consent) return { error: "Enter a valid email and agree to receive the newsletter." };
-  if (!(await allowAuthMutation("newsletter-subscribe", consent.email, 5))) {
+  const requestHeaders = await headers();
+  const ipHeader = requestHeaders.get("x-forwarded-for");
+  // Both windows are bounded per process. The IP window also limits address rotation.
+  if (!(await allowAuthMutation("newsletter-subscribe-ip", newsletterRateIdentity(ipHeader), newsletterRateLimits.perIp)) ||
+      !(await allowAuthMutation("newsletter-subscribe-email", consent.email, newsletterRateLimits.perEmail))) {
     return { error: "Please wait before trying again." };
   }
-  const requestHeaders = await headers();
-  const metadata = consentMetadataHashes(requestHeaders.get("x-forwarded-for"), requestHeaders.get("user-agent"));
+  const metadata = consentMetadataHashes(ipHeader, requestHeaders.get("user-agent"));
   const token = generateUnsubscribeToken();
   try {
     const { error } = await createServiceClient().rpc("subscribe_newsletter", {

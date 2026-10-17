@@ -10,11 +10,15 @@ const outsiderId = "00000000-0000-0000-0000-000000000002";
 
 test("consent requires an explicit opt-in and normalizes email", () => {
   assert.equal(policy.parseNewsletterConsent({ email: " USER@Example.com ", accepted: "on" }).email, "user@example.com");
+  const { normalizeNewsletterEmail } = loadModule("lib/newsletter/types.ts");
+  assert.equal(normalizeNewsletterEmail("  Reader+News@Example.COM  "), "reader+news@example.com");
   for (const input of [
     { email: "user@example.com", accepted: null },
     { email: "user@example.com", accepted: "false" },
     { email: "no address", accepted: "on" },
     { email: "a".repeat(255) + "@example.com", accepted: "on" },
+    ...["a..b@example.com", ".a@example.com", "a.@example.com", "a@@example.com", "a@-example.com", "a@example..com", "a@exam_ple.com", "a@localhost", "a b@example.com", "a\n@example.com", `${"a".repeat(65)}@example.com`, `a@${"b".repeat(64)}.com`]
+      .map((email) => ({ email, accepted: "on" })),
   ]) assert.equal(policy.parseNewsletterConsent(input), null);
 });
 
@@ -40,15 +44,21 @@ test("consent metadata never retains raw IP or user agent and does not correlate
   assert.notEqual(first.ipHash, second.ipHash);
   assert.notEqual(first.userAgentHash, second.userAgentHash);
   assert.deepEqual(policy.consentMetadataHashes("not-an-ip", "x".repeat(1025)), { ipHash: null, userAgentHash: null });
+  assert.equal(policy.newsletterRateIdentity("192.0.2.1, 10.0.0.1"), "192.0.2.1");
+  assert.equal(policy.newsletterRateIdentity("invalid"), "unknown");
 });
 
 test("public actions enforce consent and token shape, hide roster state and sanitize RPC errors", async () => {
   const calls = [];
-  let denied = false;
+  const rateCalls = [];
+  let deniedOperation = null;
   let failure = false;
   const actions = loadModule("lib/newsletter/actions.ts", {
     "next/headers": { headers: async () => new Headers({ "x-forwarded-for": "192.0.2.8", "user-agent": "Example Browser" }) },
-    "@/lib/auth/mutation": { allowAuthMutation: async () => !denied },
+    "@/lib/auth/mutation": { allowAuthMutation: async (...args) => {
+      rateCalls.push(args);
+      return args[0] !== deniedOperation;
+    } },
     "@/lib/supabase/admin": { createServiceClient: () => ({ rpc: async (...args) => {
       calls.push(args);
       return { error: failure ? new Error("private database detail") : null };
@@ -59,10 +69,13 @@ test("public actions enforce consent and token shape, hide roster state and sani
   assert.match((await actions.subscribeNewsletter({}, subscribeForm)).error, /agree/);
   assert.equal(calls.length, 0);
   subscribeForm.set("consent", "on");
-  denied = true;
+  deniedOperation = "newsletter-subscribe-ip";
   assert.match((await actions.subscribeNewsletter({}, subscribeForm)).error, /wait/);
   assert.equal(calls.length, 0);
-  denied = false;
+  deniedOperation = "newsletter-subscribe-email";
+  assert.match((await actions.subscribeNewsletter({}, subscribeForm)).error, /wait/);
+  assert.equal(calls.length, 0);
+  deniedOperation = null;
   const response = await actions.subscribeNewsletter({}, subscribeForm);
   assert.ok(response.success);
   assert.doesNotMatch(JSON.stringify(response), /[0-9a-f]{64}/);
@@ -70,6 +83,16 @@ test("public actions enforce consent and token shape, hide roster state and sani
   assert.equal(calls[0][1].p_email, "reader@example.com");
   assert.match(calls[0][1].p_token_digest, /^[0-9a-f]{64}$/);
   assert.match(calls[0][1].p_ip_hash, /^[0-9a-f]{64}$/);
+  assert.match(calls[0][1].p_user_agent_hash, /^[0-9a-f]{64}$/);
+  assert.equal(calls[0][1].p_source, "newsletter_form");
+  assert.equal(calls[0][1].p_version, policy.newsletterConsentVersion);
+  assert.ok(rateCalls.some(([operation, identity, limit]) => operation === "newsletter-subscribe-ip" && identity === "192.0.2.8" && limit === 20));
+  assert.ok(rateCalls.some(([operation, identity, limit]) => operation === "newsletter-subscribe-email" && identity === "reader@example.com" && limit === 5));
+  subscribeForm.set("email", "a..b@example.com");
+  assert.match((await actions.subscribeNewsletter({}, subscribeForm)).error, /valid email/);
+  assert.equal(calls.length, 1);
+  subscribeForm.set("email", "Reader@Example.com");
+  assert.deepEqual(await actions.subscribeNewsletter({}, subscribeForm), response);
   failure = true;
   assert.doesNotMatch((await actions.subscribeNewsletter({}, subscribeForm)).error, /private database detail/);
   const unsubscribeForm = new FormData();
@@ -80,6 +103,29 @@ test("public actions enforce consent and token shape, hide roster state and sani
   failure = false;
   assert.ok((await actions.unsubscribeNewsletter({}, unsubscribeForm)).success);
   assert.deepEqual(calls.at(-1), ["unsubscribe_newsletter", { p_token: token }]);
+});
+
+test("IP window stops rotated addresses before a database write", async () => {
+  const { AuthAttemptLimiter } = loadModule("lib/auth/mutation.ts", {
+    "server-only": {},
+    "next/headers": { headers: async () => new Headers() },
+  });
+  const limiter = new AuthAttemptLimiter();
+  let writes = 0;
+  const actions = loadModule("lib/newsletter/actions.ts", {
+    "next/headers": { headers: async () => new Headers({ "x-forwarded-for": "192.0.2.19" }) },
+    "@/lib/auth/mutation": { allowAuthMutation: async (operation, identity, limit) =>
+      limiter.take(`${operation}:${identity}`, 1000, limit) },
+    "@/lib/supabase/admin": { createServiceClient: () => ({ rpc: async () => { writes++; return { error: null }; } }) },
+  });
+  for (let index = 0; index < 21; index++) {
+    const form = new FormData();
+    form.set("email", `reader${index}@example.com`);
+    form.set("consent", "on");
+    const result = await actions.subscribeNewsletter({}, form);
+    assert.ok(index < 20 ? result.success : result.error);
+  }
+  assert.equal(writes, 20);
 });
 
 test("migration enforces roster privacy, token-only unsubscribe and retention in isolated PostgreSQL", async (t) => {
@@ -116,7 +162,7 @@ test("migration enforces roster privacy, token-only unsubscribe and retention in
 
   await t.test("new consent persists as active; duplicate cannot reverse an opt-out", async () => {
     await as("service_role", null, () => db.query("select public.subscribe_newsletter($1,$2,$3,$4,$5,$6)",
-      ["reader@example.com", "newsletter_form", "2026-10", digest, null, null]));
+      ["reader@example.com", "newsletter_form", "2026-10", digest, "f".repeat(64), "a".repeat(64)]));
     const { rows } = await db.query("select * from public.newsletter_subscribers");
     assert.equal(rows.length, 1);
     assert.equal(rows[0].status, "active");
@@ -124,6 +170,15 @@ test("migration enforces roster privacy, token-only unsubscribe and retention in
     assert.ok(rows[0].consent_timestamp);
     assert.equal(rows[0].consent_source, "newsletter_form");
     assert.equal(rows[0].consent_version, "2026-10");
+    assert.equal(rows[0].consent_ip_hash, "f".repeat(64));
+    assert.equal(rows[0].consent_user_agent_hash, "a".repeat(64));
+    await as("service_role", null, () => db.query("select public.subscribe_newsletter($1,$2,$3,$4,$5,$6)",
+      ["reader@example.com", "newsletter_form", "2026-10", "e".repeat(64), "f".repeat(64), "a".repeat(64)]));
+    const duplicate = (await db.query("select * from public.newsletter_subscribers")).rows;
+    assert.equal(duplicate.length, 1);
+    assert.equal(duplicate[0].unsubscribe_token, digest);
+    assert.equal(duplicate[0].consent_timestamp.toISOString(), rows[0].consent_timestamp.toISOString());
+    assert.equal(duplicate[0].consent_ip_hash, "f".repeat(64));
     await assert.rejects(as("service_role", null, () => db.query("select public.subscribe_newsletter($1,$2,$3,$4,$5,$6)",
       ["other@example.com", "newsletter_form", "2026-10", "raw-token", null, null])), { code: "22023" });
     await assert.rejects(as("anon", null, () => db.query("select public.subscribe_newsletter($1,$2,$3,$4,$5,$6)",
