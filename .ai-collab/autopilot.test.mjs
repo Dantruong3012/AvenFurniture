@@ -95,7 +95,7 @@ test('provider preflight uses read-only GETs, reports exact projects, and never 
   const token = 'fixture-super-secret-token';
   const fetcher = async (url, options) => {
     requests.push({ url, method: options.method ?? 'GET', auth: options.headers.Authorization });
-    const body = url.includes('vercel') ? { id: 'prj_exact', link: { productionBranch: 'main' } } : url.includes('supabase') ? [{ id: 'refexact' }] : { protected: false };
+    const body = url.includes('vercel') ? { id: 'prj_exact', link: { productionBranch: 'main' } } : url.includes('supabase') ? { id: 'refexact' } : { protected: false };
     return { status: 200, ok: true, json: async () => body };
   };
   const rights = await inspectRights(config, { VERCEL_TOKEN: token, SUPABASE_ACCESS_TOKEN: token }, fetcher);
@@ -109,6 +109,47 @@ test('provider preflight uses read-only GETs, reports exact projects, and never 
   const missing = await inspectRights(config, {}, fetcher);
   assert.equal(missing.vercel.readStatus, 'MISSING_TOKEN');
   assert.equal(missing.supabase.readStatus, 'MISSING_TOKEN');
+});
+test('Supabase scoped token reads only its configured project and exactly matches the response id', async () => {
+  const config = { repository: 'Example/Repo', productionBranch: 'main', vercelProjectId: 'prj_exact', vercelTeamId: 'team_exact', supabaseProjectRef: 'ref exact' };
+  const requested = [];
+  const fetcher = async (url) => {
+    requested.push(url);
+    return { status: 200, ok: true, json: async () => ({ id: 'other-project' }) };
+  };
+  const rights = await inspectRights(config, { SUPABASE_ACCESS_TOKEN: 'fixture-token' }, fetcher);
+  assert.ok(requested.includes('https://api.supabase.com/v1/projects/ref%20exact'));
+  assert.equal(rights.supabase.readStatus, 200);
+  assert.equal(rights.supabase.projectMatch, false);
+});
+test('Supabase preflight distinguishes auth, permission, missing project and network failures without exposing response secrets', async () => {
+  const config = { repository: 'Example/Repo', productionBranch: 'main', vercelProjectId: 'prj_exact', vercelTeamId: 'team_exact', supabaseProjectRef: 'refexact' };
+  const token = 'fixture-supabase-secret-token';
+  for (const [status, diagnostic] of [
+    [401, 'Supabase rejected the token'],
+    [403, 'Supabase denied access to this project'],
+    [404, 'Supabase did not find this project'],
+  ]) {
+    const fetcher = async (url) => url.includes('supabase')
+      ? { status, ok: false, json: async () => { throw new Error(`${token} provider-private-body`); } }
+      : { status: 200, ok: true, json: async () => ({ protected: false }) };
+    const rights = await inspectRights(config, { SUPABASE_ACCESS_TOKEN: token }, fetcher);
+    assert.equal(rights.supabase.readStatus, status);
+    assert.equal(rights.supabase.projectMatch, false);
+    assert.match(rights.supabase.diagnostic, new RegExp(diagnostic));
+    assert.equal(JSON.stringify(rights).includes(token), false);
+    assert.equal(JSON.stringify(rights).includes('provider-private-body'), false);
+  }
+  let calls = 0;
+  const networkRights = await inspectRights(config, { SUPABASE_ACCESS_TOKEN: token }, async (url) => {
+    if (url.includes('supabase')) { calls++; throw new Error(`${token} private network details`); }
+    return { status: 200, ok: true, json: async () => ({ protected: false }) };
+  });
+  assert.equal(networkRights.supabase.readStatus, 'NETWORK_ERROR');
+  assert.equal(calls, 3);
+  assert.match(networkRights.supabase.diagnostic, /could not be reached/);
+  assert.equal(JSON.stringify(networkRights).includes(token), false);
+  assert.equal(JSON.stringify(networkRights).includes('private network details'), false);
 });
 test('long provider Retry-After stops that stage without busy retries', async () => {
   let calls = 0;

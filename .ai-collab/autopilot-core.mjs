@@ -93,11 +93,22 @@ async function getJson(url, token, fetcher, attempts = 3) {
 }
 export async function inspectRights(config, env = process.env, fetcher = fetch) {
   const vercel = env.VERCEL_TOKEN ? await getJson(`https://api.vercel.com/v9/projects/${config.vercelProjectId}?teamId=${config.vercelTeamId}`, env.VERCEL_TOKEN, fetcher) : { status: 'MISSING_TOKEN' };
-  const supabase = env.SUPABASE_ACCESS_TOKEN ? await getJson('https://api.supabase.com/v1/projects', env.SUPABASE_ACCESS_TOKEN, fetcher) : { status: 'MISSING_TOKEN' };
+  const supabase = env.SUPABASE_ACCESS_TOKEN
+    ? await getJson(`https://api.supabase.com/v1/projects/${encodeURIComponent(config.supabaseProjectRef)}`, env.SUPABASE_ACCESS_TOKEN, fetcher)
+    : { status: 'MISSING_TOKEN' };
   const github = await getJson(`https://api.github.com/repos/${config.repository}/branches/${config.productionBranch}`, env.GH_TOKEN || env.GITHUB_TOKEN, fetcher);
+  const supabaseDiagnostic = supabase.status === 401
+    ? 'Supabase rejected the token; verify that it is valid and not expired.'
+    : supabase.status === 403
+      ? 'Supabase denied access to this project. The project-specific endpoint was reached; check the token permissions and whether its resource scope includes the configured project.'
+      : supabase.status === 404
+        ? 'Supabase did not find this project for the token; verify the configured project ref and token resource scope.'
+        : supabase.status === 'NETWORK_ERROR'
+          ? 'Supabase could not be reached after retries; check network connectivity and try again.'
+          : null;
   return {
     vercel: { readStatus: vercel.status, projectMatch: vercel.body?.id === config.vercelProjectId, productionBranchMatch: vercel.body?.link?.productionBranch === config.productionBranch },
-    supabase: { readStatus: supabase.status, projectMatch: Array.isArray(supabase.body) && supabase.body.some((project) => project.id === config.supabaseProjectRef) },
+    supabase: { readStatus: supabase.status, projectMatch: supabase.body?.id === config.supabaseProjectRef, ...(supabaseDiagnostic ? { diagnostic: supabaseDiagnostic } : {}) },
     github: { readStatus: github.status, authenticated: github.status === 200 && Boolean(env.GH_TOKEN || env.GITHUB_TOKEN), mainProtected: github.body?.protected === true },
   };
 }
