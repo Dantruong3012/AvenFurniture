@@ -1,6 +1,7 @@
 import { z } from "zod";
-import type { CollectionDefinition, CollectionFilterQuery, CollectionProductAssociation } from "@/lib/types";
+import type { CollectionDefinition, CollectionProductAssociation } from "@/lib/types";
 import { resolveCollectionCatalog } from "@/lib/catalog/public";
+import type { CollectionCatalogFilters } from "@/lib/catalog/public";
 
 const slugSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(160);
 const requiredCopy = (max: number) => z.string().trim().min(1).max(max).refine((value) => !value.includes("\0"));
@@ -34,13 +35,15 @@ const priceSchema = z.enum(["all", "quote", "priced", "under-1000", "1000-3000",
 const sortSchema = z.enum(["featured", "newest", "name", "price-low", "price-high"]);
 
 /** Repeated URL parameters and malformed values are rejected by the individual defaults. */
-export const collectionFilterSchema: z.ZodType<CollectionFilterQuery> = z.object({
+export const collectionFilterSchema: z.ZodType<CollectionCatalogFilters> = z.object({
   collection: slugSchema.catch(""),
   q: singleText(100),
+  category: slugSchema.catch(""),
   material: singleText(80),
   price: priceSchema.catch("all"),
   sort: sortSchema.catch("featured"),
   page: z.string().regex(/^[1-9]\d*$/).transform((value) => Math.min(10000, Number(value))).catch(1),
+  status: z.literal("published").catch("published"),
 });
 
 export type CatalogKind = "categories" | "products";

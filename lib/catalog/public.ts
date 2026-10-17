@@ -13,7 +13,7 @@ export function resolveCollectionCatalog(slug?: string): CollectionDefinition[] 
 }
 
 export function collectionProductHref(collection: CollectionDefinition): string {
-  return `/products?category=${encodeURIComponent(collection.association.categorySlug)}`;
+  return `/collections?collection=${encodeURIComponent(collection.slug)}`;
 }
 
 export function collectionForProduct(product: Pick<CatalogProduct, "category">): CollectionDefinition | null {
@@ -30,6 +30,45 @@ export type CatalogProduct = {
   createdAt: string; updatedAt: string;
 };
 export type CatalogFilters = { q: string; category: string; material: string; price: string; sort: string; page: number };
+export type CollectionCatalogFilters = CatalogFilters & { collection: string; status: "published" };
+
+/** An explicit list, including an empty one, replaces the legacy category association. */
+export function isProductInCollection(product: Pick<CatalogProduct, "attributes"> & { category: Pick<CatalogProduct["category"], "slug"> }, slug: string): boolean {
+  const attributes = product.attributes;
+  if (attributes && typeof attributes === "object" && !Array.isArray(attributes) && Object.hasOwn(attributes, "collection_slugs")) {
+    return Array.isArray(attributes.collection_slugs) && attributes.collection_slugs.includes(slug);
+  }
+  return product.category.slug === slug;
+}
+
+export function filterCollectionProducts(products: CatalogProduct[], filters: CollectionCatalogFilters): CatalogProduct[] {
+  const matches = products.filter((product) => {
+    if (!isProductInCollection(product, filters.collection)) return false;
+    if (filters.category && product.category.slug !== filters.category) return false;
+    if (filters.q && !product.name.toLocaleLowerCase().includes(filters.q.toLocaleLowerCase())) return false;
+    const material = product.attributes && typeof product.attributes === "object" && !Array.isArray(product.attributes) ? product.attributes.material : null;
+    if (filters.material && (typeof material !== "string" || !material.toLocaleLowerCase().includes(filters.material.toLocaleLowerCase()))) return false;
+    if (filters.price === "quote") return product.price === null;
+    if (filters.price === "priced") return product.price !== null;
+    if (product.price === null || product.currency !== "USD") return filters.price === "all";
+    if (filters.price === "under-1000") return product.price < 1000;
+    if (filters.price === "1000-3000") return product.price >= 1000 && product.price <= 3000;
+    if (filters.price === "over-3000") return product.price > 3000;
+    return true;
+  });
+  const newest = (a: CatalogProduct, b: CatalogProduct) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id);
+  return matches.sort((a, b) => {
+    if (filters.sort === "name") return a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
+    if (filters.sort === "newest") return newest(a, b);
+    if (filters.sort === "price-low" || filters.sort === "price-high") {
+      const currency = a.currency.localeCompare(b.currency);
+      if (currency) return currency;
+      if (a.price === null || b.price === null) return a.price === null ? (b.price === null ? a.id.localeCompare(b.id) : 1) : -1;
+      return (filters.sort === "price-low" ? a.price - b.price : b.price - a.price) || a.id.localeCompare(b.id);
+    }
+    return Number(b.featured) - Number(a.featured) || newest(a, b);
+  });
+}
 export function parseCatalogFilters(params: Record<string, string | string[] | undefined>): CatalogFilters {
   const one = (key: string) => typeof params[key] === "string" ? params[key] as string : "";
   const sort = one("sort");

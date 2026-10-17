@@ -1,26 +1,56 @@
 import "server-only";
+import { createClient } from "@supabase/supabase-js";
 import { requireAdmin } from "@/lib/auth/admin";
+import { getSupabaseConfig } from "@/lib/supabase/config";
+import { getPublishedProductsByIds } from "@/lib/repositories/supabaseProductRepository";
 import { collectionSlugsSchema, uuidPattern, type CatalogKind } from "@/lib/validation/catalog";
 import { collectionFilterSchema } from "@/lib/validation/catalog";
-import { resolveCollectionCatalog } from "@/lib/catalog/public";
-import type { CatalogFilters } from "@/lib/catalog/public";
-import type { CollectionFilterQuery, CollectionWithProducts } from "@/lib/types";
+import { filterCollectionProducts, isProductInCollection, resolveCollectionCatalog } from "@/lib/catalog/public";
+import type { CollectionCatalogFilters } from "@/lib/catalog/public";
+import type { CollectionWithProducts } from "@/lib/types";
 import type { Tables } from "@/lib/supabase/database.types";
 export type SearchParams = Record<string, string | string[] | undefined>;
-export function parseCollectionFilters(params: SearchParams): CollectionFilterQuery {
+export function parseCollectionFilters(params: SearchParams): CollectionCatalogFilters {
   const one = (key: string) => typeof params[key] === "string" ? params[key] : undefined;
   return collectionFilterSchema.parse({
-    collection: one("collection"), q: one("q"), material: one("material"),
-    price: one("price"), sort: one("sort"), page: one("page"),
+    collection: one("collection"), q: one("q"), category: one("category"), material: one("material"),
+    price: one("price"), sort: one("sort"), page: one("page"), status: one("status"),
   });
 }
 
-/** Resolve the collection to the existing public category filter; unknown slugs match nothing. */
-export function collectionProductFilters(filters: CollectionFilterQuery): CatalogFilters | null {
+/** Only known collections may start a public collection query. */
+export function collectionProductFilters(filters: CollectionCatalogFilters): CollectionCatalogFilters | null {
   const collection = resolveCollectionCatalog(filters.collection)[0];
   if (!filters.collection || !collection) return null;
-  return { q: filters.q, category: collection.association.categorySlug, material: filters.material,
-    price: filters.price, sort: filters.sort, page: filters.page };
+  return filters;
+}
+
+/** Read only published products in active categories; explicit membership overrides category fallback. */
+export async function listPublishedCollectionProducts(filters: CollectionCatalogFilters) {
+  if (!collectionProductFilters(filters)) return null;
+  const { url, publishableKey } = getSupabaseConfig();
+  const client = createClient(url, publishableKey, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } });
+  const ids: string[] = [];
+  for (let start = 0; ; start += 1000) {
+    const { data, error } = await client.from("products")
+      .select("id,attributes,categories!inner(slug,active)")
+      .eq("status", "published").eq("categories.active", true).order("id").range(start, start + 999);
+    if (error) throw new Error("Collection products are temporarily unavailable.");
+    const rows = data ?? [];
+    for (const row of rows) {
+      const category = row.categories as unknown as { slug: string };
+      if (isProductInCollection({ attributes: row.attributes, category }, filters.collection)) ids.push(row.id);
+    }
+    if (rows.length < 1000) break;
+  }
+  const batches: string[][] = [];
+  for (let start = 0; start < ids.length; start += 100) batches.push(ids.slice(start, start + 100));
+  const published = (await Promise.all(batches.map((batch) => getPublishedProductsByIds(batch)))).flat();
+  const associated = published.filter((product) => isProductInCollection(product, filters.collection));
+  const categories = [...new Map(associated.map((product) => [product.category.id, product.category])).values()]
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const filtered = filterCollectionProducts(associated, filters);
+  return { products: filtered.slice((filters.page - 1) * 24, filters.page * 24), count: filtered.length, total: associated.length, categories };
 }
 
 /** Explicit membership takes precedence; legacy products inherit their category collection. */

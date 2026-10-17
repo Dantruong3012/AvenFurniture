@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { loadModule } from "./helpers/load-module.mjs";
 const { validateCatalog, suggestSlug, catalogError } = loadModule("lib/validation/catalog.ts");
 const { collectionDefinitionSchema, collectionTaxonomySchema, collectionFilterSchema, collectionSlugsSchema, collectionProductAssociationSchema, collectionProductAssociationsSchema } = loadModule("lib/validation/catalog.ts");
-const { collectionCatalog, resolveCollectionCatalog, collectionForProduct, collectionProductHref } = loadModule("lib/catalog/public.ts");
+const { collectionCatalog, resolveCollectionCatalog, collectionForProduct, collectionProductHref, isProductInCollection, filterCollectionProducts } = loadModule("lib/catalog/public.ts");
 const id = "00000000-0000-0000-0000-000000000001";
 const form = (overrides = {}) => {
   const values = { id: "", name: "Bàn gỗ đẹp", slug: "", description: "Oak table", category_id: id, price: "", currency: "USD", status: "draft", attributes: "{}", sort_order: "0", ...overrides };
@@ -50,24 +50,78 @@ test("collection associations use exact category slugs and produce usable produc
   assert.deepEqual(resolveCollectionCatalog("unknown"), []);
   for (const collection of collectionCatalog) {
     const url = new URL(collectionProductHref(collection), "https://example.test");
-    assert.equal(url.pathname, "/products");
-    assert.equal(url.searchParams.get("category"), collection.association.categorySlug);
+    assert.equal(url.pathname, "/collections");
+    assert.equal(url.searchParams.get("collection"), collection.slug);
   }
 });
 test("collection filter schema defaults malformed or repeated values and bounds search", () => {
   const { parseCollectionFilters, collectionProductFilters } = loadModule("lib/catalog/queries.ts", { "server-only": {}, "@/lib/auth/admin": {} });
-  const filters = parseCollectionFilters({ collection: "living", q: `  ${"a".repeat(120)}  `, material: " oak ", price: "quote", sort: "newest", page: "10001" });
+  const filters = parseCollectionFilters({ collection: "living", q: `  ${"a".repeat(120)}  `, category: "chairs", material: " oak ", price: "quote", sort: "newest", page: "10001", status: "draft" });
   assert.equal(filters.q.length, 100);
   assert.equal(filters.material, "oak");
   assert.equal(filters.page, 10000);
-  assert.deepEqual(collectionProductFilters(filters), { q: filters.q, category: "living", material: "oak", price: "quote", sort: "newest", page: 10000 });
-  const invalid = parseCollectionFilters({ collection: ["living", "dining"], q: ["oak"], material: ["wood"], price: "free", sort: "random", page: "2evil" });
-  assert.deepEqual(invalid, { collection: "", q: "", material: "", price: "all", sort: "featured", page: 1 });
+  assert.equal(filters.status, "published");
+  assert.deepEqual(collectionProductFilters(filters), filters);
+  const invalid = parseCollectionFilters({ collection: ["living", "dining"], q: ["oak"], category: "bad/slug", material: ["wood"], price: "free", sort: "random", page: "2evil", status: "archived" });
+  assert.deepEqual(invalid, { collection: "", q: "", category: "", material: "", price: "all", sort: "featured", page: 1, status: "published" });
   assert.equal(collectionProductFilters(invalid), null);
   assert.equal(collectionProductFilters(parseCollectionFilters({ collection: "unknown" })), null);
   assert.equal(collectionProductFilters(parseCollectionFilters({ collection: "living%2Cdining" })), null);
   assert.equal(parseCollectionFilters({ collection: "living", page: "0002" }).page, 1);
-  assert.equal(collectionFilterSchema.safeParse({ collection: "living", q: "", material: "", price: "all", sort: "featured", page: "1" }).success, true);
+  assert.equal(collectionFilterSchema.safeParse({ collection: "living", q: "", category: "", material: "", price: "all", sort: "featured", page: "1", status: "published" }).success, true);
+});
+test("collection membership and filters honor explicit associations, category, material and sort", () => {
+  const makeProduct = (suffix, name, category, attributes, price, featured = false) => ({
+    id: suffix, name, category: { id: category, name: category, slug: category }, attributes, price,
+    currency: "USD", featured, createdAt: `2026-01-0${suffix}T00:00:00Z`,
+  });
+  const legacy = makeProduct("1", "Oak chair", "living", { material: "oak" }, 500);
+  const explicit = makeProduct("2", "Oak table", "dining", { material: "oak", collection_slugs: ["living"] }, 200, true);
+  const excluded = makeProduct("3", "Oak stool", "living", { material: "oak", collection_slugs: [] }, 100);
+  assert.equal(isProductInCollection(legacy, "living"), true);
+  assert.equal(isProductInCollection(explicit, "living"), true);
+  assert.equal(isProductInCollection(excluded, "living"), false);
+  const filters = parseCollectionFiltersForTest({ collection: "living", q: "oak", material: "OAK", sort: "price-low" });
+  assert.deepEqual(filterCollectionProducts([excluded, explicit, legacy], filters).map(({ id }) => id), ["2", "1"]);
+  assert.deepEqual(filterCollectionProducts([excluded, explicit, legacy], { ...filters, category: "dining" }).map(({ id }) => id), ["2"]);
+  assert.deepEqual(filterCollectionProducts([excluded, explicit, legacy], { ...filters, material: "walnut" }), []);
+});
+function parseCollectionFiltersForTest(params) {
+  const { parseCollectionFilters } = loadModule("lib/catalog/queries.ts", { "server-only": {}, "@/lib/auth/admin": {} });
+  return parseCollectionFilters(params);
+}
+test("public collection query excludes drafts and unrelated products before filtering", async () => {
+  const calls = [];
+  const source = [
+    { id: "legacy", status: "published", attributes: {}, categories: { slug: "living", active: true } },
+    { id: "explicit", status: "published", attributes: { collection_slugs: ["living"] }, categories: { slug: "dining", active: true } },
+    { id: "excluded", status: "published", attributes: { collection_slugs: [] }, categories: { slug: "living", active: true } },
+    { id: "draft", status: "draft", attributes: {}, categories: { slug: "living", active: true } },
+    { id: "inactive", status: "published", attributes: {}, categories: { slug: "living", active: false } },
+  ];
+  const details = [
+    { id: "legacy", name: "Oak chair", category: { id: "living", name: "Living", slug: "living" }, attributes: { material: "oak" }, price: 500, currency: "USD", featured: false, createdAt: "2026-01-01" },
+    { id: "explicit", name: "Walnut table", category: { id: "dining", name: "Dining", slug: "dining" }, attributes: { material: "walnut", collection_slugs: ["living"] }, price: 1000, currency: "USD", featured: true, createdAt: "2026-01-02" },
+  ];
+  const query = {
+    select() { return this; }, eq(key, value) { calls.push([key, value]); this[key] = value; return this; },
+    order() { return this; }, async range() { return { data: source.filter((row) => row.status === this.status && row.categories.active === this["categories.active"]), error: null }; },
+  };
+  const { listPublishedCollectionProducts } = loadModule("lib/catalog/queries.ts", {
+    "server-only": {}, "@/lib/auth/admin": {},
+    "@supabase/supabase-js": { createClient: () => ({ from: () => query }) },
+    "@/lib/supabase/config": { getSupabaseConfig: () => ({ url: "https://example.test", publishableKey: "test" }) },
+    "@/lib/repositories/supabaseProductRepository": { getPublishedProductsByIds: async (ids) => { calls.push(["ids", ids]); return details.filter((row) => ids.includes(row.id)); } },
+  });
+  const result = await listPublishedCollectionProducts(parseCollectionFiltersForTest({ collection: "living" }));
+  assert.deepEqual(calls, [["status", "published"], ["categories.active", true], ["ids", ["legacy", "explicit"]]]);
+  assert.deepEqual(result.products.map(({ id }) => id), ["explicit", "legacy"]);
+  assert.equal(result.total, 2);
+  assert.equal(result.count, 2);
+  const empty = await listPublishedCollectionProducts(parseCollectionFiltersForTest({ collection: "living", q: "missing" }));
+  assert.equal(empty.total, 2); assert.equal(empty.count, 0); assert.deepEqual(empty.products, []);
+  const unassociated = await listPublishedCollectionProducts(parseCollectionFiltersForTest({ collection: "bedroom" }));
+  assert.equal(unassociated.total, 0); assert.equal(unassociated.count, 0); assert.deepEqual(unassociated.products, []);
 });
 test("collection product associations require existing collections, UUIDs and unique pairs", () => {
   const valid = { productId: id, collectionSlug: "living" };
