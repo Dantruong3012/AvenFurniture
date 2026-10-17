@@ -20,6 +20,22 @@ export async function afterCompleted(root, checkpoint, checks, options = {}) {
     const config = configuration(root);
     const evidence = archiveCompleted(root, checkpoint, checks, options.git);
     if (!config.enabled && !config.developmentPushEnabled) return { ok: true, sha: evidence.sha, pushed: false };
+    const git = options.git ?? gitRunner(root, config.timeoutMs);
+    const releasePath = join(root, '.ai-collab/.runtime/releases', `${evidence.sha}.json`);
+    if (existsSync(releasePath)) {
+      const release = JSON.parse(readFileSync(releasePath, 'utf8'));
+      if (release.sha === evidence.sha) {
+        const head = git('rev-parse', 'HEAD');
+        if (git('merge-base', evidence.sha, head) === evidence.sha) {
+          if (!config.enabled && release.stage === 'PUSHED') {
+            return { ok: true, sha: evidence.sha, pushed: true, remoteBranch: release.remoteBranch, remoteSha: release.remoteSha, productionDeployment: false, automaticMerge: false };
+          }
+          if (config.enabled && release.stage === 'PREVIEW_READY') {
+            return { ok: true, sha: evidence.sha, pushed: true, preview: release.stage, deploymentId: release.deploymentId };
+          }
+        }
+      }
+    }
     const save = options.save ?? store(root);
     if (!config.enabled) {
       const pushed = pushCompleted({ root, config, evidence, checks, git: options.git, save });

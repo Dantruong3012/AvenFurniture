@@ -37,15 +37,32 @@ export function verifyCompleted(root, completed, checks, git = gitRunner(root)) 
   const request = JSON.parse(c.commitRequest.result.details);
   if (request.parent !== c.baseHead || request.tree !== c.commitTree || request.message !== c.title) throw new Error('Commit request does not match reviewed tree');
   if (!c.committedSnapshot || c.approvedDigest !== digest(c.committedSnapshot)) throw new Error('Reviewed snapshot is missing or stale');
+  if (git('status', '--porcelain=v1')) throw new Error('Completed commit, metadata tree, or working tree changed');
   const head = git('rev-parse', 'HEAD');
-  if (git('rev-parse', `${c.commit}^`) !== c.baseHead || git('rev-parse', `${c.commit}^{tree}`) !== c.commitTree ||
-    git('rev-parse', `${head}^`) !== c.commit || git('rev-parse', `${head}^{tree}`) !== c.metadataTree || git('status', '--porcelain=v1')) throw new Error('Completed commit, metadata tree, or working tree changed');
+  if (git('rev-parse', `${c.commit}^`) !== c.baseHead || git('rev-parse', `${c.commit}^{tree}`) !== c.commitTree) throw new Error('Completed commit, metadata tree, or working tree changed');
+  let metaSha;
+  try {
+    if (git('rev-parse', `${head}^`) === c.commit && git('rev-parse', `${head}^{tree}`) === c.metadataTree) {
+      metaSha = head;
+    }
+  } catch {}
+  if (!metaSha) {
+    try {
+      if (git('merge-base', c.commit, head) !== c.commit) throw new Error();
+      const children = git('rev-list', '--ancestry-path', '--reverse', `${c.commit}..${head}`).split('\n').filter(Boolean);
+      const candidate = children[0];
+      if (!candidate || git('rev-parse', `${candidate}^`) !== c.commit || git('rev-parse', `${candidate}^{tree}`) !== c.metadataTree) throw new Error();
+      metaSha = candidate;
+    } catch {
+      throw new Error('Completed commit, metadata tree, or working tree changed');
+    }
+  }
   const metadata = ['.ai-collab/BACKLOG.md', '.ai-collab/STATE.md', `.ai-collab/tasks/${c.task.id}/IMPLEMENTATION.md`];
-  if (git('diff', '--name-only', c.commit, head).split('\n').filter(Boolean).some((path) => !metadata.includes(path)) ||
-    changes(c.committedSnapshot, snapshot(root)).some((path) => !metadata.includes(path))) throw new Error('Unreviewed source in metadata commit');
+  if (git('diff', '--name-only', c.commit, metaSha).split('\n').filter(Boolean).some((path) => !metadata.includes(path))) throw new Error('Unreviewed source in metadata commit');
+  if (metaSha === head && changes(c.committedSnapshot, snapshot(root)).some((path) => !metadata.includes(path))) throw new Error('Unreviewed source in metadata commit');
   const review = git('show', `${c.commit}:.ai-collab/tasks/${c.task.id}/REVIEW.md`);
   if (!/^Status: APPROVED$/m.test(review) || !/^Reviewer: Antigravity\b/m.test(review)) throw new Error('Committed Antigravity approval missing');
-  return head;
+  return metaSha;
 }
 export function archiveCompleted(root, checkpoint, checks, git = gitRunner(root)) {
   const sha = verifyCompleted(root, checkpoint, checks, git);

@@ -902,7 +902,7 @@ async function run(resume) {
           const released = await afterCompleted(root, checkpoint, config.checks);
           event('DEVELOPMENT_PUSH_RECONCILIATION', released);
           if (!released.ok) { process.exitCode = 1; return; }
-          handoffSha = released.sha;
+          handoffSha = git('rev-parse', 'HEAD');
         }
       }
       if (!checkpoint?.task || ['DONE', 'IDLE'].includes(checkpoint.status)) {

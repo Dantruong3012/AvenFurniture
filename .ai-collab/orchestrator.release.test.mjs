@@ -332,4 +332,58 @@ test('deterministic coordinator commit request satisfies completion verification
     assert.equal(sha, f.sha);
   } finally { f.cleanup(); }
 });
+test('successfully pushed DONE task reconciles cleanly when followed by legitimate backlog commits', async () => {
+  const f = fixture({ ...policy, enabled: false, developmentPushEnabled: true });
+  try {
+    const initial = await afterCompleted(f.root, f.checkpoint, checks, { git: f.git });
+    assert.equal(initial.ok, true, JSON.stringify(initial));
+    assert.equal(initial.pushed, true);
+    assert.equal(f.realGit('rev-parse', 'HEAD'), f.sha);
+
+    // Legitimate backlog commit advances branch HEAD past the completed metadata commit
+    writeFileSync(join(f.root, '.ai-collab/BACKLOG.md'), 'updated backlog content\n');
+    f.realGit('add', '.ai-collab/BACKLOG.md');
+    f.realGit('commit', '-qm', 'docs(backlog): approve wave 1 scope');
+    const newHead = f.realGit('rev-parse', 'HEAD');
+    assert.notEqual(newHead, f.sha);
+    assert.equal(f.realGit('merge-base', f.sha, newHead), f.sha);
+
+    // Reconciliation on restart must succeed without error or re-pushing
+    const reconciled = await afterCompleted(f.root, f.checkpoint, checks, { git: f.git });
+    assert.equal(reconciled.ok, true, JSON.stringify(reconciled));
+    assert.equal(reconciled.sha, f.sha);
+    assert.equal(reconciled.pushed, true);
+    assert.equal(reconciled.remoteBranch, policy.developmentBranch);
+    assert.equal(reconciled.remoteSha, f.sha);
+    assert.equal(reconciled.productionDeployment, false);
+    assert.equal(reconciled.automaticMerge, false);
+    assert.equal(f.realGit('status', '--porcelain'), '');
+  } finally { f.cleanup(); }
+});
+test('reconciliation after subsequent commits still rejects dirty tree or missing ancestry', async () => {
+  const f = fixture({ ...policy, enabled: false, developmentPushEnabled: true });
+  try {
+    const initial = await afterCompleted(f.root, f.checkpoint, checks, { git: f.git });
+    assert.equal(initial.ok, true, JSON.stringify(initial));
+
+    // Subsequent commit
+    writeFileSync(join(f.root, '.ai-collab/BACKLOG.md'), 'updated backlog content\n');
+    f.realGit('add', '.ai-collab/BACKLOG.md');
+    f.realGit('commit', '-qm', 'docs(backlog): approve wave 1 scope');
+
+    // Unsafe dirty working tree must be rejected
+    writeFileSync(join(f.root, 'dirty.txt'), 'dirty work\n');
+    const dirtyResult = await afterCompleted(f.root, f.checkpoint, checks, { git: f.git });
+    assert.equal(dirtyResult.ok, false);
+    assert.match(dirtyResult.error, /Completed commit, metadata tree, or working tree changed/);
+    rmSync(join(f.root, 'dirty.txt'));
+
+    // Diverged branch without completion ancestry must be rejected
+    f.realGit('checkout', '-qb', 'diverged', 'main');
+    const divergedResult = await afterCompleted(f.root, f.checkpoint, checks, { git: f.git });
+    assert.equal(divergedResult.ok, false);
+    assert.match(divergedResult.error, /Completed commit, metadata tree, or working tree changed/);
+  } finally { f.cleanup(); }
+});
+
 
