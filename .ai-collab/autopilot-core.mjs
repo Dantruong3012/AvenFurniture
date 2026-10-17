@@ -8,7 +8,7 @@ export function gitRead(root, ...args) {
   if (result.error || result.status !== 0) throw new Error(`Git ${args[0]} inspection failed`);
   return result.stdout.trimEnd();
 }
-export function assessQueue({ checkpoint, tasks, blockedArtifacts = [], branch, expectedBranch, remoteMatches = true, credentialFileRisk = false, dirty, locked, roadmapApproved }) {
+export function assessQueue({ checkpoint, tasks, blockedArtifacts = [], branch, expectedBranch, remoteMatches = true, credentialFileRisk = false, dirty, locked, roadmapApproved, quotaReady = false }) {
   if (!roadmapApproved) return { status: 'BLOCKED', reason: 'Roadmap approval is missing' };
   if (locked) return { status: 'BLOCKED', reason: 'Coordinator lock exists; inspect before starting another process' };
   if (checkpoint?.status === 'BLOCKED') return { status: 'BLOCKED', task: checkpoint.task?.id, reason: 'Architectural checkpoint requires an approved plan and supported recovery' };
@@ -17,6 +17,7 @@ export function assessQueue({ checkpoint, tasks, blockedArtifacts = [], branch, 
   if (branch !== expectedBranch) return { status: 'BLOCKED', reason: 'Checkout is not the configured development branch' };
   if (checkpoint?.status === 'PAUSED_QUOTA') {
     const retryAt = checkpoint.quota?.retryAt;
+    if (quotaReady) return { status: 'RESUME', task: checkpoint.task?.id };
     if (!retryAt || !Number.isFinite(Date.parse(retryAt)) || Date.now() < Date.parse(retryAt)) return { status: 'PAUSED_QUOTA', task: checkpoint.task?.id, retryAt: retryAt ?? null };
     return { status: 'RESUME', task: checkpoint.task?.id };
   }
@@ -32,7 +33,7 @@ export function assessQueue({ checkpoint, tasks, blockedArtifacts = [], branch, 
   if (tasks.every((task) => task.status === 'DONE')) return { status: 'COMPLETE' };
   return { status: 'BLOCKED', reason: 'No eligible task; inspect dependencies and approvals' };
 }
-export function inspectLocal(root, queue, config) {
+export function inspectLocal(root, queue, config, quotaReady = false) {
   const branch = gitRead(root, 'branch', '--show-current');
   const origin = gitRead(root, 'remote', 'get-url', 'origin');
   const remoteMatches = [`https://github.com/${config.repository}.git`, `git@github.com:${config.repository}.git`].includes(origin);
@@ -51,8 +52,13 @@ export function inspectLocal(root, queue, config) {
     const path = join(root, '.ai-collab/tasks', task.id, name);
     return existsSync(path) && /^Status: (?:BLOCKED|REVISED)$/m.test(readFileSync(path, 'utf8'));
   })).map((task) => task.id);
-  const assessment = assessQueue({ checkpoint, tasks: queue.tasks, blockedArtifacts, branch, expectedBranch: config.developmentBranch, remoteMatches, credentialFileRisk, dirty, locked: existsSync(join(root, '.ai-collab/.lock')), roadmapApproved: /^Roadmap approval: APPROVED$/m.test(queue.content) });
+  const assessment = assessQueue({ checkpoint, tasks: queue.tasks, blockedArtifacts, branch, expectedBranch: config.developmentBranch, remoteMatches, credentialFileRisk, dirty, locked: existsSync(join(root, '.ai-collab/.lock')), roadmapApproved: /^Roadmap approval: APPROVED$/m.test(queue.content), quotaReady });
   return { branch, head, remoteMatches, credentialFileRisk, dirty, worktrees, checkpoint: checkpoint ? { task: checkpoint.task?.id ?? null, status: checkpoint.status, phase: checkpoint.phase } : null, ...assessment };
+}
+export function orchestratorArgs(local, quotaReady = false) {
+  if (local.status === 'RESUME') return local.checkpoint?.status === 'PAUSED_QUOTA' && quotaReady ? ['resume', '--quota-ready'] : ['resume'];
+  if (local.status === 'RUN') return ['run'];
+  throw new Error('Coordinator invocation requires RUN or RESUME preflight');
 }
 export function assessAgentQuota(receipt, quotaReady = false, now = Date.now(), smokeProof = null, runnerDigest = null) {
   if (!receipt || receipt.kind !== 'RESOURCE_EXHAUSTED') return null;

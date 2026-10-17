@@ -6,12 +6,13 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { backlog } from './workflow.mjs';
 import { agentEnvironment, atomicJSON, quotaFailure } from './orchestrator-core.mjs';
-import { inspectLocal, inspectRights, assessAgentQuota, releasePrerequisites } from './autopilot-core.mjs';
+import { inspectLocal, inspectRights, assessAgentQuota, releasePrerequisites, orchestratorArgs } from './autopilot-core.mjs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const workspace = join(root, '.ai-collab');
 const config = JSON.parse(readFileSync(join(workspace, 'autopilot.config.json'), 'utf8'));
 const action = process.argv[2] ?? 'run';
+const quotaReady = process.argv.includes('--quota-ready');
 const report = (value) => console.log(JSON.stringify(value));
 const smokeReceipt = join(workspace, '.runtime/autopilot-smoke.json');
 const failedSmokeReceipt = join(workspace, '.runtime/autopilot-smoke-failed.json');
@@ -22,7 +23,7 @@ const smokeVerified = () => existsSync(smokeReceipt) && JSON.parse(readFileSync(
 const smokeFailed = () => !smokeVerified() && existsSync(failedSmokeReceipt) && JSON.parse(readFileSync(failedSmokeReceipt, 'utf8')).runnerDigest === runnerDigest();
 const quota = () => existsSync(quotaReceipt) ? assessAgentQuota(
   JSON.parse(readFileSync(quotaReceipt, 'utf8')),
-  process.argv.includes('--quota-ready'),
+  quotaReady,
   Date.now(),
   existsSync(smokeReceipt) ? JSON.parse(readFileSync(smokeReceipt, 'utf8')) : null,
   runnerDigest(),
@@ -67,7 +68,7 @@ try {
     }
   } else {
     if (!/^v22\./.test(process.version)) throw new Error('Node 22 is required');
-    const local = inspectLocal(root, backlog(), config);
+    const local = inspectLocal(root, backlog(), config, quotaReady);
     const rights = await inspectRights(config);
     const release = JSON.parse(readFileSync(join(workspace, 'release.config.json'), 'utf8'));
     const status = { phase: 'PREFLIGHT', local, rights, smokeVerified: smokeVerified(), smokeFailed: smokeFailed(), quota: quota(), developmentOnly: !release.enabled, automaticMerge: false, productionDeployment: false };
@@ -91,7 +92,7 @@ try {
       if (!process.exitCode) {
         mkdirSync(join(workspace, '.runtime'), { recursive: true, mode: 0o700 });
         atomicJSON(join(workspace, '.runtime/autopilot-status.json'), { phase: local.status, task: local.task, head: local.head, time: new Date().toISOString() });
-        const code = await runChild('.ai-collab/orchestrator.mjs', [local.status === 'RESUME' ? 'resume' : 'run']);
+        const code = await runChild('.ai-collab/orchestrator.mjs', orchestratorArgs(local, quotaReady));
         atomicJSON(join(workspace, '.runtime/autopilot-status.json'), { phase: code === 0 ? 'STOPPED' : 'BLOCKED', exitCode: code, time: new Date().toISOString() });
         process.exitCode = code;
       }

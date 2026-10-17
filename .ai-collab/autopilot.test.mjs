@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assessQueue, inspectRights, assessAgentQuota, releasePrerequisites } from './autopilot-core.mjs';
+import { assessQueue, inspectRights, assessAgentQuota, releasePrerequisites, orchestratorArgs } from './autopilot-core.mjs';
 import { agentEnvironment, redactSensitive } from './orchestrator-core.mjs';
 import { execute } from './orchestrator-core.mjs';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -30,8 +30,25 @@ test('quota retry time and interrupted task retain the same task identity', () =
   const future = new Date(Date.now() + 300000).toISOString();
   const checkpoint = { status: 'PAUSED_QUOTA', task: { id: 'ready' }, quota: { retryAt: future } };
   assert.equal(assessQueue({ ...safe, checkpoint }).status, 'PAUSED_QUOTA');
+  assert.deepEqual(assessQueue({ ...safe, checkpoint, quotaReady: true }), { status: 'RESUME', task: 'ready' });
+  assert.deepEqual(assessQueue({ ...safe, checkpoint: { ...checkpoint, quota: { retryAt: null } }, quotaReady: true }), { status: 'RESUME', task: 'ready' });
+  assert.equal(assessQueue({ ...safe, checkpoint: { ...checkpoint, quota: { retryAt: null } } }).status, 'PAUSED_QUOTA');
   assert.deepEqual(assessQueue({ ...safe, checkpoint: { ...checkpoint, quota: { retryAt: new Date(Date.now() - 1000).toISOString() } } }), { status: 'RESUME', task: 'ready' });
   assert.deepEqual(assessQueue({ ...safe, checkpoint: { status: 'STOPPED', task: { id: 'ready' } } }), { status: 'RESUME', task: 'ready' });
+});
+test('explicit quota-ready forwards only for a paused coordinator resume', () => {
+  const paused = { status: 'RESUME', checkpoint: { status: 'PAUSED_QUOTA' } };
+  assert.deepEqual(orchestratorArgs(paused, true), ['resume', '--quota-ready']);
+  assert.deepEqual(orchestratorArgs(paused), ['resume']);
+  assert.deepEqual(orchestratorArgs({ status: 'RESUME', checkpoint: { status: 'STOPPED' } }, true), ['resume']);
+  assert.deepEqual(orchestratorArgs({ status: 'RUN' }, true), ['run']);
+  assert.throws(() => orchestratorArgs({ status: 'PAUSED_QUOTA' }, true));
+});
+test('quota-ready still enforces branch, remote, credential and lock guards', () => {
+  const checkpoint = { status: 'PAUSED_QUOTA', task: { id: 'ready' }, quota: { retryAt: null } };
+  for (const unsafe of [{ branch: 'main' }, { remoteMatches: false }, { credentialFileRisk: true }, { locked: true }, { roadmapApproved: false }]) {
+    assert.equal(assessQueue({ ...safe, checkpoint, quotaReady: true, ...unsafe }).status, 'BLOCKED');
+  }
 });
 test('dirty stopped or running task resumes only after launcher safety guards', () => {
   for (const status of ['STOPPED', 'RUNNING']) {
