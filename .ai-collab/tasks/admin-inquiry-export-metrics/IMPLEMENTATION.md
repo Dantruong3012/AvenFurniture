@@ -3,7 +3,7 @@
 Status: READY_FOR_REVIEW
 Changed paths: app/admin/(protected)/inquiries/page.tsx, app/api/admin/inquiries/export/route.ts, components/admin/inquiry-portal.tsx, lib/inquiries/actions.ts, lib/repositories/supabaseInquiryRepository.ts, tests/admin-inquiry.test.mjs
 Commit: feat(admin-inquiry-export-metrics): implement approved task
-Commit hash: -
+Commit hash: 1298ba9be55d2405720d7542b0f0d79e4c8e296b
 
 Fixed the failing inquiry page test and verified the full test suite passes.
 

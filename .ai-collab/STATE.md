@@ -1,10 +1,10 @@
 # Workflow state
 
-Active task: admin-inquiry-export-metrics
-Current phase: APPROVED
-Last completed task: storefront-consultant-zalo
-Next task: admin-inquiry-export-metrics
+Active task: -
+Current phase: IDLE
+Last completed task: admin-inquiry-export-metrics
+Next task: -
 Blockers: -
-Last successful commit: 24a596140c46f2c385a892ebb44d640a8564ac39
+Last successful commit: 1298ba9be55d2405720d7542b0f0d79e4c8e296b
 
 This is the current pointer, not a substitute for `BACKLOG.md` or the task artifacts. Update it at each handoff. Do not mark a task `DONE` until its tests, Antigravity review, and commit are verified.
