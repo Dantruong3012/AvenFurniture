@@ -2,7 +2,13 @@
 
 For the one-command launcher, read [AUTOPILOT.md](AUTOPILOT.md). The launcher uses this existing coordinator and preserves its checkpoint and review rules.
 
-`AGENTS.md` is the shared policy. Antigravity owns planning/review; Codex owns implementation/tests and requests local commits after approval. The Node coordinator calls the real CLI processes sequentially. No IDE-to-IDE messaging, extra npm dependency, Production deployment, or database migration is part of this runner.
+`AGENTS.md` is the shared policy. Antigravity owns planning/review; Codex owns implementation and targeted fixes. The Node coordinator executes checks and, when deterministic commit mode is enabled, performs the local commit after approval. No IDE-to-IDE messaging, extra npm dependency, Production deployment, or database migration is part of this runner.
+
+## Compact handoffs and quota telemetry
+
+The coordinator writes `IMPLEMENTATION_BRIEF.md` from the approved plan and exact source allowlist, then gives Codex that bounded handoff. It records Codex's structured result in `IMPLEMENTATION_SUMMARY.md`; independent checks retain complete private logs in `.ai-collab/.runtime/` and write concise, deduplicated excerpts to `VERIFY_REPORT.md`. Review receives the plan, summary, verification report, owned-file diff, and bounded new-file content. Review feedback becomes a targeted `REWORK.md`; at most three implementation/review rounds are allowed.
+
+Per-turn usage records input, cached input, output, total tokens, tool calls, shell output bytes, and duration in the checkpoint and private `.runtime/telemetry.json`. Configurable phase budgets emit warnings; reported usage is not a remaining-quota estimate. With `deterministicCommit: true` and `commitAgent` other than `codex`, the coordinator stages only task-owned paths, scans staged blobs, and commits after a real approved review and passing checks. Omit that setting to preserve the legacy Codex commit-request protocol.
 
 ## Run, monitor, stop, resume
 

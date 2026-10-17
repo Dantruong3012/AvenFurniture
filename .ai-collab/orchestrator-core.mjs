@@ -70,12 +70,33 @@ export function agentTokenUsage(kind, output) {
     }
   } catch { return null; }
   if (!usage || typeof usage !== 'object') return null;
-  const input = usage.input_tokens ?? usage.inputTokens;
+  const input = usage.input_tokens ?? usage.inputTokens ?? usage.prompt_tokens;
   const outputTokens = usage.output_tokens ?? usage.outputTokens;
   const total = usage.total_tokens ?? usage.totalTokens ?? (Number(input) + Number(outputTokens));
   if (![input, outputTokens, total].every((value) => Number.isSafeInteger(value) && value >= 0)) return null;
-  return { inputTokens: input, outputTokens, totalTokens: total };
+  const cachedInputTokens = usage.cached_input_tokens ?? usage.cachedInputTokens ?? usage.prompt_tokens_details?.cached_tokens ?? usage.input_tokens_details?.cached_tokens ?? 0;
+  const toolCalls = usage.tool_calls ?? usage.toolCalls ?? usage.tool_call_count ?? 0;
+  return { inputTokens: input, cachedInputTokens: Number.isSafeInteger(cachedInputTokens) && cachedInputTokens >= 0 ? cachedInputTokens : 0, outputTokens, totalTokens: total, toolCalls: Number.isSafeInteger(toolCalls) && toolCalls >= 0 ? toolCalls : 0 };
 }
+export function evaluateBudget(telemetry, budgets = {}) {
+  const phase = telemetry?.phase ?? telemetry?.operation ?? 'default';
+  const budget = budgets[phase] ?? budgets.default ?? {};
+  const metrics = ['inputTokens', 'cachedInputTokens', 'outputTokens', 'totalTokens', 'toolCalls', 'shellOutputBytes', 'durationMs'];
+  const exceeded = metrics.filter((key) => Number.isFinite(budget[key]) && Number(telemetry?.[key] ?? 0) > budget[key]);
+  return { phase, exceeded, warning: exceeded.length ? 'PHASE_BUDGET_EXCEEDED' : null };
+}
+export function summarizeCheckOutput(output, command, logPath) {
+  const lines = String(output ?? '').split(/\r?\n/);
+  const useful = lines.filter((line) => /(?:\b(?:FAIL|FAILED|ERROR|Error:|AssertionError|Expected:|Received:|not ok\b|✖|×)\b|\b(?:at\s+)?[^\s:]+:\d+(?::\d+)?)/i.test(line))
+    .map((line) => line.trim()).filter((line) => line && !/^\s*(?:npm (?:ERR!|error)|Node\.js|\s+at processTicksAndRejections)/i.test(line));
+  const excerpts = [...new Set(useful)].slice(0, 30);
+  return { command: Array.isArray(command) ? command.join(' ') : String(command ?? ''), exitCode: 1, failedTests: [...new Set(lines.map((line) => line.match(/(?:not ok\s+\d+\s+-\s+|✖\s+)([^\r\n(]+)/)?.[1]?.trim()).filter(Boolean))], excerpts, logPath: String(logPath ?? '') };
+}
+const mdSafe = (value) => String(value ?? '').replace(/[\r\n|]/g, ' ').slice(0, 1200);
+export function implementationBriefMarkdown(data) { return `# Implementation brief: ${mdSafe(data.task)}\n\n${mdSafe(data.objective)}\n\n## Authorized files\n\n${(data.paths ?? []).map((p) => `- ${mdSafe(p)}`).join('\n') || '- None'}\n\n## Requirements\n\n${mdSafe(data.requirements)}\n\n## Acceptance criteria\n\n${mdSafe(data.acceptanceCriteria)}\n`; }
+export function implementationSummaryMarkdown(data) { return `# Implementation summary: ${mdSafe(data.task)}\n\n## Changed files\n\n${(data.paths ?? []).map((p) => `- ${mdSafe(p)}`).join('\n') || '- None'}\n\n## Behavior and evidence\n\n${mdSafe(data.summary)}\n\n${mdSafe(data.details)}\n\n## Limitations / review questions\n\n${mdSafe(data.limitations ?? 'None reported')}\n`; }
+export function verifyReportMarkdown(data) { return `# Verification report: ${mdSafe(data.task)}\n\n${(data.checks ?? []).map((c) => `## ${mdSafe(c.command)} — ${c.exitCode === 0 ? 'PASS' : 'FAIL'}\n\n${c.logPath ? `Full log: ${mdSafe(c.logPath)}\n\n` : ''}${c.excerpts?.length ? c.excerpts.map((x) => `- ${mdSafe(x)}`).join('\n') : 'No failure excerpts.'}`).join('\n\n')}\n`; }
+export function reworkMarkdown(data) { return `# Rework: ${mdSafe(data.task)}\n\nRound: ${data.round}\n\n## Root cause\n\n${mdSafe(data.rootCause)}\n\n## Required correction\n\n${mdSafe(data.correction)}\n\n## Files\n\n${(data.paths ?? []).map((p) => `- ${mdSafe(p)}`).join('\n') || '- Existing authorized files only'}\n`; }
 export function tokenWarning(usage) {
   if (!usage) return null;
   // A conservative per-turn warning, not a provider quota or context-remaining estimate.

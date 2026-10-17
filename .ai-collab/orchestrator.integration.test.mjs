@@ -26,8 +26,9 @@ if(agy&&invocationCwd===process.cwd())process.exit(9);
 const phase=agy?(prompt.includes('Plan task')?'plan':'review'):(prompt.includes('Request the coordinator')?'commit':'implement');
 const id=(prompt.match(/(?:Plan task|Review task|Implement task) (t[12])/i)||[])[1] || 't1';
 if(agy&&phase==='plan'&&prompt.includes('Repository tracked files'))process.exit(7);
-if(agy&&phase==='review'&&(!prompt.includes('NEW FILES')||!prompt.includes('verified')||prompt.includes('CURRENT FILES')))process.exit(7);
+if(agy&&phase==='review'&&prompt.includes('Review task')&&(!prompt.includes('NEW FILES')||!prompt.includes('verified')||prompt.includes('CURRENT FILES')))process.exit(7);
 const result={status:'READY',summary:'Fixture evidence',paths:[id+'.txt'],details:'Implement the exact proof file.'};
+if(agy&&prompt.includes('Diagnose check failure')){result.status='CHANGES_REQUESTED';result.summary='Fixture diagnosis';result.details='Root cause: fixture check assertion failed. Correct the task-owned implementation.';}
 if(agy&&phase==='plan'&&mode==='architecture-block') {
   const recovering=prompt.includes('reviewed inquiry-status architecture recovery');
   const tick=String.fromCharCode(96);
@@ -63,7 +64,7 @@ if(agy && (((mode==='quota-plan'&&phase==='plan')||(mode==='quota-review'&&phase
   console.error('AGY_ERROR: RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 30h29m49s.');
   process.exit(3);
 }
-if(phase==='review') {
+if(phase==='review'&&prompt.includes('Review task')) {
   result.status=mode==='reject-review'?'CHANGES_REQUESTED':'APPROVED';
   if(mode==='mutate-review')writeFileSync('verify.mjs','unexpected');
 }
@@ -137,6 +138,22 @@ async function waitFor(dir, operation) {
 }
 test('two tasks complete with actual Git trees and dependency order',async()=>{
  const dir=fixture('success',true);try {const r=await run(dir);assert.equal(r.code,0,r.output);const done=events(dir).filter(e=>e.phase==='DONE');assert.deepEqual(done.map(e=>e.task),['t1','t2']);assert.equal(spawnSync('git',['rev-list','--count','HEAD'],{cwd:dir,encoding:'utf8'}).stdout.trim(),'5');assert.equal(spawnSync('git',['status','--porcelain'],{cwd:dir,encoding:'utf8'}).stdout,'');const handoff=readFileSync(join(dir,'.ai-collab/.runtime/HANDOFF.md'),'utf8');assert.match(handoff,/Task: t2/);assert.match(handoff,/Reason: TASK_DONE/);assert.ok(events(dir).some(e=>e.phase==='TOKEN_WARNING'));}finally{rmSync(dir,{recursive:true});}
+});
+test('optimized workflow writes compact handoffs and commits without a Codex commit turn', async () => {
+ const dir=fixture();try{
+  const configPath=join(dir,'.ai-collab/orchestrator.config.json');const config=JSON.parse(readFileSync(configPath,'utf8'));config.deterministicCommit=true;config.commitAgent='orchestrator';config.quotaOptimization=true;config.budgets={implement:{inputTokens:10}};writeFileSync(configPath,JSON.stringify(config));rmSync(join(dir,'.ai-collab/release.config.json'));gitCall(dir,'add','-u','--','.ai-collab');gitCall(dir,'add','--','.ai-collab/orchestrator.config.json');gitCall(dir,'commit','-qm','test: enable optimized workflow fixture');
+  const result=await run(dir);assert.equal(result.code,0,result.output);const taskDir=join(dir,'.ai-collab/tasks/t1');
+  for(const name of ['IMPLEMENTATION_BRIEF.md','IMPLEMENTATION_SUMMARY.md','VERIFY_REPORT.md'])assert.ok(existsSync(join(taskDir,name)),name);
+  assert.ok(existsSync(join(dir,'.ai-collab/.runtime/telemetry.json')));assert.equal(events(dir).some(e=>e.agent==='codex'&&e.operation==='commit'),false);
+  assert.ok(events(dir).some(e=>e.phase==='TOKEN_WARNING'&&e.budget?.warning==='PHASE_BUDGET_EXCEEDED'));assert.equal(gitCall(dir,'rev-list','--count','HEAD'),'4');
+ }finally{rmSync(dir,{recursive:true});}
+});
+test('optimized failed checks get Antigravity diagnosis and a bounded rework handoff', async () => {
+ const dir=fixture('fail-check');try{
+  const configPath=join(dir,'.ai-collab/orchestrator.config.json');const config=JSON.parse(readFileSync(configPath,'utf8'));config.quotaOptimization=true;writeFileSync(configPath,JSON.stringify(config));rmSync(join(dir,'.ai-collab/release.config.json'));gitCall(dir,'add','-u','--','.ai-collab');gitCall(dir,'add','--','.ai-collab/orchestrator.config.json');gitCall(dir,'commit','-qm','test: enable optimized diagnosis fixture');
+  const result=await run(dir);assert.equal(result.code,1);assert.equal(checkpoint(dir).status,'BLOCKED');assert.equal(events(dir).filter(e=>e.phase==='CLI_COMPLETED'&&e.agent==='antigravity'&&e.operation==='diagnose').length,3,result.output);
+  assert.match(readFileSync(join(dir,'.ai-collab/tasks/t1/VERIFY_REPORT.md'),'utf8'),/Full log/);assert.match(readFileSync(join(dir,'.ai-collab/tasks/t1/REWORK.md'),'utf8'),/Root cause: fixture check assertion failed/);
+ }finally{rmSync(dir,{recursive:true});}
 });
 test('interrupted review envelope is never treated as approval and retries once with a new receipt',async()=>{
  const dir=fixture('stream-interrupt');try{const r=await run(dir);assert.equal(r.code,0,r.output);const entries=events(dir);assert.equal(entries.filter(e=>e.phase==='CLI_TRANSIENT_RETRY'&&e.operation==='review').length,1);assert.equal(entries.filter(e=>e.phase==='CLI_COMPLETED'&&e.operation==='review').length,1);assert.equal(entries.filter(e=>e.phase==='DONE').length,1);assert.equal(entries.find(e=>e.phase==='CLI_COMPLETED'&&e.operation==='review').sequence,4);}finally{rmSync(dir,{recursive:true});}

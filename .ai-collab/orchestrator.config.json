@@ -3,6 +3,15 @@
   "codex": ["npx", "-y", "@openai/codex"],
   "timeoutMs": 600000,
   "maxRounds": 3,
+  "deterministicCommit": true,
+  "commitAgent": "orchestrator",
+  "quotaOptimization": true,
+  "budgets": {
+    "plan": { "inputTokens": 24000, "outputTokens": 6000, "toolCalls": 0 },
+    "implement": { "inputTokens": 32000, "outputTokens": 8000, "toolCalls": 20 },
+    "review": { "inputTokens": 32000, "outputTokens": 8000, "toolCalls": 0 },
+    "default": { "totalTokens": 40000 }
+  },
   "checks": [
     ["npm", "run", "lint"],
     ["npm", "run", "typecheck"],

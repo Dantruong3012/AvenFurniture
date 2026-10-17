@@ -3,15 +3,16 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { root, workspace, backlog, nextTask, hasBlocker, field, replaceField, setTaskRow, taskPath, changedWorkingPaths, scanStaged, git } from './workflow.mjs';
-import { schema, validateResult, atomicJSON, snapshot, digest, changes, assertScope, validatePaths, acquireLock, releaseLock, execute, assertNoSecrets, quotaFailure, contextFailure, agentTokenUsage, tokenWarning, handoffMarkdown, redactSensitive, agentEnvironment } from './orchestrator-core.mjs';
+import { schema, validateResult, atomicJSON, snapshot, digest, changes, assertScope, validatePaths, acquireLock, releaseLock, execute, assertNoSecrets, quotaFailure, contextFailure, agentTokenUsage, tokenWarning, handoffMarkdown, redactSensitive, agentEnvironment, evaluateBudget, summarizeCheckOutput, implementationBriefMarkdown, implementationSummaryMarkdown, verifyReportMarkdown, reworkMarkdown } from './orchestrator-core.mjs';
 
 const runtime = join(workspace, '.runtime');
 const checkpointPath = join(runtime, 'checkpoint.json');
 const stopFile = join(runtime, 'STOP');
 const lock = join(workspace, '.lock');
 const config = JSON.parse(readFileSync(join(workspace, 'orchestrator.config.json'), 'utf8'));
+const quotaOptimization = config.quotaOptimization === true;
 const configDigest = digest(config);
-if (!Number.isInteger(config.maxRounds) || config.maxRounds < 1 || config.maxRounds > 3 || !Number.isInteger(config.timeoutMs) || config.timeoutMs < 1000 || config.timeoutMs > 3600000 || !Array.isArray(config.checks) || config.checks.length < 1) throw new Error('Invalid orchestration limits/checks');
+if (!Number.isInteger(config.maxRounds) || config.maxRounds < 1 || config.maxRounds > 3 || !Number.isInteger(config.timeoutMs) || config.timeoutMs < 1000 || config.timeoutMs > 3600000 || !Array.isArray(config.checks) || config.checks.length < 1 || (config.deterministicCommit !== undefined && typeof config.deterministicCommit !== 'boolean') || (config.commitAgent !== undefined && !['codex', 'orchestrator'].includes(config.commitAgent)) || (config.quotaOptimization !== undefined && typeof config.quotaOptimization !== 'boolean') || (config.budgets !== undefined && (typeof config.budgets !== 'object' || Array.isArray(config.budgets) || Object.values(config.budgets).some((budget) => !budget || typeof budget !== 'object' || Array.isArray(budget) || Object.values(budget).some((limit) => !Number.isFinite(limit) || limit < 0))))) throw new Error('Invalid orchestration limits/checks/budgets');
 for (const name of ['antigravity', 'codex', 'checks']) {
   const commands = name === 'checks' ? config.checks : [config[name]];
   for (const command of commands) if (!Array.isArray(command) || !command.length || command.some((v) => typeof v !== 'string' || /dangerously|danger-full-access/.test(v))) throw new Error('Invalid/unsafe CLI configuration');
@@ -570,12 +571,15 @@ function reviewContext() {
     return `FILE ${path}\n${text}`;
   }).join('\n\n');
   const diff = git('diff', checkpoint.baseHead, '--', ...checkpoint.paths);
-  const context = `PLAN\n${read(taskPath(checkpoint.task.id, 'PLAN.md'))}\nIMPLEMENTATION\n${read(taskPath(checkpoint.task.id, 'IMPLEMENTATION.md'))}\nTRACKED FILE DIFF\n${diff}\nNEW FILES\n${newFiles}`;
+  const summaryPath = taskPath(checkpoint.task.id, 'IMPLEMENTATION_SUMMARY.md');
+  const verifyPath = taskPath(checkpoint.task.id, 'VERIFY_REPORT.md');
+  const context = `PLAN\n${read(taskPath(checkpoint.task.id, 'PLAN.md'))}\nIMPLEMENTATION SUMMARY\n${existsSync(summaryPath) ? read(summaryPath) : read(taskPath(checkpoint.task.id, 'IMPLEMENTATION.md'))}\nVERIFY REPORT\n${existsSync(verifyPath) ? read(verifyPath) : '(not generated)'}\nTRACKED FILE DIFF\n${diff}\nNEW FILES\n${newFiles}`;
   if (context.length > 60000) throw new Error('Review context exceeds bounded input; split the task');
   assertNoSecrets(context, 'review context');
   return context;
 }
 async function agent(kind, phase, prompt, statuses, transientAttempt = 0) {
+  const startedAt = Date.now();
   const seq = checkpoint.sequence = (checkpoint.sequence ?? 0) + 1; save();
   const prefix = join(runtime, `${checkpoint.task.id}-${seq}-${phase}`);
   const schemaFile = `${prefix}.schema.json`, resultFile = `${prefix}.result.json`;
@@ -602,12 +606,16 @@ async function agent(kind, phase, prompt, statuses, transientAttempt = 0) {
   } finally {
     if (isolatedCwd) rmSync(isolatedCwd, { recursive: true, force: true });
   }
+  const durationMs = Date.now() - startedAt;
   const usage = agentTokenUsage(kind, result.stdout);
   if (usage) {
-    checkpoint.lastTokenUsage = { ...usage, agent: kind, operation: phase, sequence: seq };
+    checkpoint.lastTokenUsage = { ...usage, durationMs, shellOutputBytes: Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr), agent: kind, operation: phase, sequence: seq };
+    checkpoint.telemetry = [...(checkpoint.telemetry ?? []), checkpoint.lastTokenUsage];
+    atomicJSON(join(runtime, 'telemetry.json'), { task: checkpoint.task.id, records: checkpoint.telemetry, totals: checkpoint.telemetry.reduce((totals, item) => { for (const key of ['inputTokens', 'cachedInputTokens', 'outputTokens', 'totalTokens', 'toolCalls', 'shellOutputBytes', 'durationMs']) totals[key] = (totals[key] ?? 0) + (item[key] ?? 0); return totals; }, {}) });
     save();
-    if (tokenWarning(usage)) {
-      event('TOKEN_WARNING', { agent: kind, operation: phase, sequence: seq, usage });
+    const budgetResult = evaluateBudget({ ...checkpoint.lastTokenUsage, phase }, config.budgets);
+    if (tokenWarning(usage) || budgetResult.warning) {
+      event('TOKEN_WARNING', { agent: kind, operation: phase, sequence: seq, usage: checkpoint.lastTokenUsage, budget: budgetResult });
       writeHandoff('TOKEN_USAGE_HIGH', 'Inspect the bounded task context and saved receipts before the next model call; split the task if necessary.');
     }
   }
@@ -650,10 +658,10 @@ function select() {
   return nextTask(data.tasks) ?? data.tasks.filter((t) => t.status === 'BACKLOG' && !hasBlocker(t) && t.dependencies.every((id) => data.tasks.some((dep) => dep.id === id && dep.status === 'DONE' && !hasBlocker(dep)))).sort((a, b) => a.priority.localeCompare(b.priority) || a.lineNumber - b.lineNumber)[0];
 }
 function assertTaskScope(baseline = checkpoint.baseline) {
-  assertScope(baseline, snapshot(root), [...checkpoint.paths, '.ai-collab/BACKLOG.md', '.ai-collab/STATE.md', ...['PLAN.md', 'IMPLEMENTATION.md', 'REVIEW.md'].map((name) => `.ai-collab/tasks/${checkpoint.task.id}/${name}`)]);
+  assertScope(baseline, snapshot(root), [...checkpoint.paths, '.ai-collab/BACKLOG.md', '.ai-collab/STATE.md', ...['PLAN.md', 'IMPLEMENTATION.md', 'REVIEW.md', 'IMPLEMENTATION_BRIEF.md', 'IMPLEMENTATION_SUMMARY.md', 'VERIFY_REPORT.md', 'REWORK.md'].map((name) => `.ai-collab/tasks/${checkpoint.task.id}/${name}`)]);
 }
 function sourceDigest() {
-  const ignored = ['.ai-collab/BACKLOG.md', '.ai-collab/STATE.md', ...['PLAN.md', 'IMPLEMENTATION.md', 'REVIEW.md'].map((name) => `.ai-collab/tasks/${checkpoint.task.id}/${name}`)];
+  const ignored = ['.ai-collab/BACKLOG.md', '.ai-collab/STATE.md', ...['PLAN.md', 'IMPLEMENTATION.md', 'REVIEW.md', 'IMPLEMENTATION_BRIEF.md', 'IMPLEMENTATION_SUMMARY.md', 'VERIFY_REPORT.md', 'REWORK.md'].map((name) => `.ai-collab/tasks/${checkpoint.task.id}/${name}`)];
   return digest(Object.fromEntries(Object.entries(snapshot(root)).filter(([path]) => !ignored.includes(path))));
 }
 function requiredScripts() {
@@ -663,25 +671,41 @@ async function verify() {
   if (digest(requiredScripts()) !== checkpoint.scriptsDigest) throw new Error('Package check commands changed; separate approval required before trusting tests');
   const before = snapshot(root), head = git('rev-parse', 'HEAD'), index = git('write-tree');
   checkpoint.checks = []; save();
+  const recordCheckTelemetry = (shellOutputBytes, durationMs) => {
+    const record = { agent: 'orchestrator', operation: 'check', phase: 'checks', inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, totalTokens: 0, toolCalls: 0, shellOutputBytes, durationMs };
+    checkpoint.telemetry = [...(checkpoint.telemetry ?? []), record];
+    const totals = checkpoint.telemetry.reduce((sum, item) => { for (const key of ['inputTokens', 'cachedInputTokens', 'outputTokens', 'totalTokens', 'toolCalls', 'shellOutputBytes', 'durationMs']) sum[key] = (sum[key] ?? 0) + (item[key] ?? 0); return sum; }, {});
+    atomicJSON(join(runtime, 'telemetry.json'), { task: checkpoint.task.id, records: checkpoint.telemetry, totals });
+    const budgetResult = evaluateBudget(record, config.budgets);
+    if (budgetResult.warning) event('TOKEN_WARNING', { agent: 'orchestrator', operation: 'check', budget: budgetResult, telemetry: record });
+  };
   for (let i = 0; i < config.checks.length; i++) {
     const command = config.checks[i];
+    const logPath = join(runtime, `${checkpoint.task.id}-round-${checkpoint.round}-check-${i}.log`);
+    const checkStartedAt = Date.now();
     try {
-      await execute(command, { root, timeoutMs: config.timeoutMs, stopFile, log: join(runtime, `${checkpoint.task.id}-round-${checkpoint.round}-check-${i}.log`), onChild: (pid) => atomicJSON(join(lock, 'owner.json'), { pid: process.pid, childPid: pid }) });
-      checkpoint.checks.push({ command, exitCode: 0 }); save();
+      const result = await execute(command, { root, timeoutMs: config.timeoutMs, stopFile, log: logPath, onChild: (pid) => atomicJSON(join(lock, 'owner.json'), { pid: process.pid, childPid: pid }) });
+      const shellOutputBytes = Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr);
+      recordCheckTelemetry(shellOutputBytes, Date.now() - checkStartedAt);
+      checkpoint.checks.push({ command, exitCode: 0, logPath: `.ai-collab/.runtime/${checkpoint.task.id}-round-${checkpoint.round}-check-${i}.log`, shellOutputBytes }); save();
     } catch (error) {
-      checkpoint.checks.push({ command, exitCode: 1 }); save();
+      recordCheckTelemetry(Buffer.byteLength(error.output ?? ''), Date.now() - checkStartedAt);
+      const report = summarizeCheckOutput(error.output ?? (existsSync(logPath) ? read(logPath) : ''), command, `.ai-collab/.runtime/${checkpoint.task.id}-round-${checkpoint.round}-check-${i}.log`);
+      checkpoint.checks.push({ ...report, shellOutputBytes: Buffer.byteLength(error.output ?? '') }); save();
       if (error.message === 'STOPPED') throw error;
-      checkpoint.feedback = `Required check failed: ${command.join(' ')}. Inspect the private check log and fix within the plan.`;
+      checkpoint.feedback = `Required check failed: ${command.join(' ')}. Filtered evidence: ${report.excerpts.join(' | ') || 'no concise excerpts'}; full log: ${report.logPath}.`;
+      if (quotaOptimization) artifact('VERIFY_REPORT.md', verifyReportMarkdown({ task: checkpoint.task.id, checks: checkpoint.checks }));
       return false;
     }
   }
   if (git('rev-parse', 'HEAD') !== head || git('write-tree') !== index) throw new Error('Checks changed Git state');
   assertScope(before, snapshot(root), []);
   checkpoint.verifiedDigest = sourceDigest(); save();
+  if (quotaOptimization) artifact('VERIFY_REPORT.md', verifyReportMarkdown({ task: checkpoint.task.id, checks: checkpoint.checks }));
   return true;
 }
 function implementation(status) {
-  artifact('IMPLEMENTATION.md', `# Implementation: ${checkpoint.task.id}\n\nStatus: ${status}\nChanged paths: ${checkpoint.paths.join(', ')}\nCommit: ${checkpoint.title}\nCommit hash: ${checkpoint.commit ?? '-'}\n\n${checkpoint.implementation?.summary ?? ''}\n\n${checkpoint.implementation?.details ?? ''}\n\n## Independent checks\n\n${(checkpoint.checks ?? []).map((c) => `- ${c.command.join(' ')}: ${c.exitCode === 0 ? 'PASS' : 'FAIL'}`).join('\n')}\n`);
+  artifact('IMPLEMENTATION.md', `# Implementation: ${checkpoint.task.id}\n\nStatus: ${status}\nChanged paths: ${checkpoint.paths.join(', ')}\nCommit: ${checkpoint.title}\nCommit hash: ${checkpoint.commit ?? '-'}\n\n${checkpoint.implementation?.summary ?? ''}\n\n${checkpoint.implementation?.details ?? ''}\n\n## Independent checks\n\n${(checkpoint.checks ?? []).map((c) => `- ${Array.isArray(c.command) ? c.command.join(' ') : c.command}: ${c.exitCode === 0 ? 'PASS' : 'FAIL'}`).join('\n')}\n`);
 }
 function verifyCommit() {
   const head = git('rev-parse', 'HEAD');
@@ -707,17 +731,32 @@ async function taskLoop() {
       if (checkpoint.approvedArchitecturePlanDigest && !hasApprovedInquiryStatuses(receipt.result.details)) throw new Error(architecturePlanningError);
       checkpoint.paths = plannedPaths; checkpoint.planReceipt = receipt;
       artifact('PLAN.md', `# Plan: ${checkpoint.task.id}\n\nStatus: APPROVED\n\n${receipt.result.details}\n\nOwned paths: ${checkpoint.paths.join(', ')}\n`);
+      if (quotaOptimization) artifact('IMPLEMENTATION_BRIEF.md', implementationBriefMarkdown({ task: checkpoint.task.id, objective: checkpoint.task.criteria, paths: checkpoint.paths, requirements: receipt.result.details, acceptanceCriteria: checkpoint.task.criteria }));
       transition('READY');
     } else if (checkpoint.phase === 'READY' || checkpoint.phase === 'CHANGES_REQUESTED') {
       if (checkpoint.round >= config.maxRounds) throw new Error('Maximum three implementation/review rounds reached');
+      if (quotaOptimization && checkpoint.phase === 'CHANGES_REQUESTED') artifact('REWORK.md', reworkMarkdown({ task: checkpoint.task.id, round: checkpoint.round + 1, rootCause: checkpoint.feedback ?? 'Review identified an unmet acceptance criterion.', correction: checkpoint.feedback ?? 'Address the review feedback within the approved plan.', paths: checkpoint.paths }));
       checkpoint.round++; transition('IN_PROGRESS');
     } else if (checkpoint.phase === 'IN_PROGRESS') {
-      const receipt = await agent('codex', 'implement', `Implement task ${checkpoint.task.id}. Read .ai-collab/tasks/${checkpoint.task.id}/PLAN.md. Only modify these exact paths: ${checkpoint.paths.join(', ')}. Run relevant tests. Do not stage/commit or edit artifacts. Feedback: ${checkpoint.feedback ?? 'Initial implementation'}. Return READY_FOR_REVIEW with actual changed paths and detailed evidence, or BLOCKED. Required checks run independently by coordinator: ${JSON.stringify(config.checks)}.`, ['READY_FOR_REVIEW']);
+      const handoff = quotaOptimization && checkpoint.round > 1 && existsSync(taskPath(checkpoint.task.id, 'REWORK.md')) ? 'REWORK.md' : quotaOptimization ? 'IMPLEMENTATION_BRIEF.md' : 'PLAN.md';
+      const handoffPath = taskPath(checkpoint.task.id, handoff);
+      const handoffText = existsSync(handoffPath) ? read(handoffPath) : read(taskPath(checkpoint.task.id, 'PLAN.md'));
+      const receipt = await agent('codex', 'implement', `Implement task ${checkpoint.task.id} using this compact ${handoff} handoff:\n${handoffText}\nOnly modify these exact paths: ${checkpoint.paths.join(', ')}. Do not stage/commit or edit coordinator artifacts. Feedback: ${checkpoint.feedback ?? 'Initial implementation'}. Return READY_FOR_REVIEW with actual changed paths and evidence, or BLOCKED.`, ['READY_FOR_REVIEW']);
       checkpoint.implementation = receipt.result;
       if (!changes(checkpoint.baseline, snapshot(root)).some((path) => checkpoint.paths.includes(path))) throw new Error('Implementation produced no task change');
+      if (quotaOptimization) artifact('IMPLEMENTATION_SUMMARY.md', implementationSummaryMarkdown({ task: checkpoint.task.id, paths: receipt.result.paths, summary: receipt.result.summary, details: receipt.result.details }));
       implementation('IN_PROGRESS'); transition('TESTING');
     } else if (checkpoint.phase === 'TESTING') {
-      if (!await verify()) { implementation('IN_PROGRESS'); transition('CHANGES_REQUESTED'); continue; }
+      if (!await verify()) {
+        if (quotaOptimization) {
+          const report = read(taskPath(checkpoint.task.id, 'VERIFY_REPORT.md'));
+          const diagnosis = await agent('antigravity', 'diagnose', `Diagnose check failure for ${checkpoint.task.id}. Use only this filtered verification report; do not request raw logs or run tools. Identify root cause and the smallest correction within the approved source allowlist. Return CHANGES_REQUESTED with actionable details.\n${report}`, ['CHANGES_REQUESTED']);
+          checkpoint.diagnosisReceipt = diagnosis;
+          checkpoint.feedback = diagnosis.result.details;
+          save();
+        }
+        implementation('IN_PROGRESS'); transition('CHANGES_REQUESTED'); continue;
+      }
       implementation('READY_FOR_REVIEW'); transition('READY_FOR_REVIEW');
     } else if (checkpoint.phase === 'READY_FOR_REVIEW') {
       if (checkpoint.verifiedDigest !== sourceDigest()) throw new Error('Source changed since tests; re-verification required');
@@ -741,10 +780,14 @@ async function taskLoop() {
         checkpoint.commitTree = git('write-tree'); save();
       } else if (git('write-tree') !== checkpoint.commitTree) throw new Error('Index changed since commit checkpoint');
       const identity = checkpoint.identity;
-      const receipt = await agent('codex', 'commit', `Antigravity approved this task; coordinator independently passed checks, scanned and staged exact task files. You are in read-only mode. Do not run write commands, stage, commit, edit, amend, reset, push, or deploy. Request the coordinator's narrow Git executor to create ONE local commit. Return status COMMIT_REQUESTED and details as a JSON string encoding exactly {"parent":"${checkpoint.baseHead}","tree":"${checkpoint.commitTree}","message":${JSON.stringify(checkpoint.title)}}. Verify supplied review/check evidence: ${JSON.stringify(checkpoint.checks)}; reviewer summary: ${checkpoint.reviewReceipt.result.summary}. Return BLOCKED if not appropriate.`, ['COMMIT_REQUESTED']);
-      const request = JSON.parse(receipt.result.details);
-      if (request.parent !== checkpoint.baseHead || request.tree !== checkpoint.commitTree || request.message !== checkpoint.title) throw new Error('Codex commit request does not match approved Git state');
-      checkpoint.commitRequest = receipt; save();
+      if (config.deterministicCommit === true && config.commitAgent !== 'codex') {
+        checkpoint.commitRequest = { agent: 'orchestrator', operation: 'commit', result: { status: 'COMMIT_REQUESTED' } }; save();
+      } else {
+        const receipt = await agent('codex', 'commit', `Antigravity approved this task; coordinator independently passed checks, scanned and staged exact task files. You are in read-only mode. Do not run write commands, stage, commit, edit, amend, reset, push, or deploy. Request the coordinator's narrow Git executor to create ONE local commit. Return status COMMIT_REQUESTED and details as a JSON string encoding exactly {"parent":"${checkpoint.baseHead}","tree":"${checkpoint.commitTree}","message":${JSON.stringify(checkpoint.title)}}. Verify supplied review/check evidence: ${JSON.stringify(checkpoint.checks)}; reviewer summary: ${checkpoint.reviewReceipt.result.summary}. Return BLOCKED if not appropriate.`, ['COMMIT_REQUESTED']);
+        const request = JSON.parse(receipt.result.details);
+        if (request.parent !== checkpoint.baseHead || request.tree !== checkpoint.commitTree || request.message !== checkpoint.title) throw new Error('Codex commit request does not match approved Git state');
+        checkpoint.commitRequest = receipt; save();
+      }
       if (checkpoint.approvedDigest !== digest(snapshot(root)) || git('write-tree') !== checkpoint.commitTree || git('rev-parse', 'HEAD') !== checkpoint.baseHead) throw new Error('Git state changed before fixed commit execution');
       git('-c', `user.name=${identity.name}`, '-c', `user.email=${identity.email}`, 'commit', '-m', checkpoint.title);
       if (!verifyCommit()) throw new Error('Fixed commit execution did not create the expected commit');
@@ -755,7 +798,7 @@ async function taskLoop() {
         if (checkpoint.metadataTree && git('rev-parse', 'HEAD^') === checkpoint.commit && git('rev-parse', 'HEAD^{tree}') === checkpoint.metadataTree && !git('status', '--porcelain')) return;
         throw new Error('Unexpected HEAD during metadata recovery');
       }
-      const metadataPaths = ['.ai-collab/BACKLOG.md', '.ai-collab/STATE.md', `.ai-collab/tasks/${checkpoint.task.id}/IMPLEMENTATION.md`];
+      const metadataPaths = ['.ai-collab/BACKLOG.md', '.ai-collab/STATE.md', ...['IMPLEMENTATION.md', 'IMPLEMENTATION_BRIEF.md', 'IMPLEMENTATION_SUMMARY.md', 'VERIFY_REPORT.md', 'REWORK.md'].map((name) => `.ai-collab/tasks/${checkpoint.task.id}/${name}`)];
       assertScope(checkpoint.committedSnapshot, snapshot(root), metadataPaths);
       implementation('READY_FOR_REVIEW');
       const data = backlog(), task = data.tasks.find((t) => t.id === checkpoint.task.id);

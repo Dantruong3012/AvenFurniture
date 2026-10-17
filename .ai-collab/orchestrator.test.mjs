@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
-import { validateResult, validatePaths, assertScope, snapshot, acquireLock, atomicJSON, execute, quotaFailure, contextFailure, agentTokenUsage, tokenWarning, handoffMarkdown } from './orchestrator-core.mjs';
+import { validateResult, validatePaths, assertScope, snapshot, acquireLock, atomicJSON, execute, quotaFailure, contextFailure, agentTokenUsage, tokenWarning, handoffMarkdown, evaluateBudget, summarizeCheckOutput, implementationBriefMarkdown, implementationSummaryMarkdown, verifyReportMarkdown, reworkMarkdown } from './orchestrator-core.mjs';
 
 test('classify quota separately from implementation and architecture failures', () => {
   const quota = quotaFailure('AGY_ERROR: RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 30h29m49s.', Date.UTC(2026, 9, 16));
@@ -27,9 +27,9 @@ test('distinguish context exhaustion, record real CLI usage, and generate a safe
   assert.equal(contextFailure('RESOURCE_EXHAUSTED: Individual quota reached'), false);
   assert.equal(contextFailure('Architecture blocker: missing transaction'), false);
   const agy = agentTokenUsage('antigravity', JSON.stringify({ usage: { input_tokens: 35000, output_tokens: 100, total_tokens: 35100 } }));
-  assert.deepEqual(agy, { inputTokens: 35000, outputTokens: 100, totalTokens: 35100 });
+  assert.deepEqual(agy, { inputTokens: 35000, cachedInputTokens: 0, outputTokens: 100, totalTokens: 35100, toolCalls: 0 });
   assert.equal(tokenWarning(agy), 'TOKEN_USAGE_HIGH');
-  assert.deepEqual(agentTokenUsage('codex', JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120 } })), { inputTokens: 100, outputTokens: 20, totalTokens: 120 });
+  assert.deepEqual(agentTokenUsage('codex', JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 100, prompt_tokens_details: { cached_tokens: 40 }, output_tokens: 20, total_tokens: 120, tool_calls: 2 } })), { inputTokens: 100, cachedInputTokens: 40, outputTokens: 20, totalTokens: 120, toolCalls: 2 });
   assert.equal(tokenWarning({ inputTokens: 100, outputTokens: 20, totalTokens: 120 }), null);
   assert.equal(agentTokenUsage('antigravity', '{broken'), null);
   const handoff = handoffMarkdown({ task: 't1', phase: 'PLANNING', status: 'PAUSED_QUOTA', branch: 'dev/test', head: 'abc', changedPaths: ['t1.txt'], receipts: ['t1-1-plan.receipt.json'], usage: agy, reason: 'RESOURCE_EXHAUSTED', nextAction: 'Inspect checkpoint before resume.' });
@@ -37,6 +37,15 @@ test('distinguish context exhaustion, record real CLI usage, and generate a safe
   assert.match(handoff, /35000 input/);
   assert.match(handoff, /Inspect checkpoint before resume/);
   assert.doesNotMatch(handoff, /token value|raw model output copied/);
+});
+test('quota optimization helpers preserve concise evidence and phase telemetry', () => {
+  assert.deepEqual(evaluateBudget({ phase: 'review', inputTokens: 300, durationMs: 11 }, { review: { inputTokens: 200 } }), { phase: 'review', exceeded: ['inputTokens'], warning: 'PHASE_BUDGET_EXCEEDED' });
+  const report = summarizeCheckOutput('noise\nnot ok 3 - parser rejects input\nAssertionError: expected x\n    at test.mjs:12:4\nnoise\n', ['npm', 'test'], '.runtime/test.log');
+  assert.deepEqual(report.failedTests, ['parser rejects input']); assert.equal(report.excerpts.length, 3); assert.equal(report.logPath, '.runtime/test.log');
+  assert.match(implementationBriefMarkdown({ task: 't1', objective: 'build', paths: ['a.mjs'], requirements: 'keep scope', acceptanceCriteria: 'works' }), /Authorized files/);
+  assert.match(implementationSummaryMarkdown({ task: 't1', paths: ['a.mjs'], summary: 'done', details: 'evidence' }), /Changed files/);
+  assert.match(verifyReportMarkdown({ task: 't1', checks: [{ command: 'npm test', exitCode: 1, excerpts: ['AssertionError'], logPath: '.runtime/test.log' }] }), /Full log/);
+  assert.match(reworkMarkdown({ task: 't1', round: 2, rootCause: 'bad input', correction: 'fix parser', paths: ['a.mjs'] }), /Required correction/);
 });
 
 test('reject false approval, malformed JSON contract, and unsafe owned paths', () => {

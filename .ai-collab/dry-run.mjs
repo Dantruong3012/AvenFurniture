@@ -42,9 +42,10 @@ const code = await new Promise((resolve, reject) => {
 if (digest(snapshot(root)) !== before) throw new Error('Original repository changed during proof; inspect before proceeding');
 if (code !== 0) throw new Error(`Proof stopped; inspect ${fixture}/.ai-collab/.runtime`);
 const events = readFileSync(join(fixture, '.ai-collab/.runtime/events.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
-for (const [agent, operation] of [['antigravity', 'plan'], ['codex', 'implement'], ['antigravity', 'review'], ['codex', 'commit']]) {
+for (const [agent, operation] of [['antigravity', 'plan'], ['codex', 'implement'], ['antigravity', 'review']]) {
   if (!events.some((e) => e.phase === 'CLI_COMPLETED' && e.agent === agent && e.operation === operation)) throw new Error(`Missing real handoff ${agent}/${operation}`);
 }
+if (events.some((e) => e.phase === 'CLI_COMPLETED' && e.operation === 'commit')) throw new Error('Deterministic commit unexpectedly invoked an agent');
 const done = events.find((e) => e.phase === 'DONE');
 if (!done) throw new Error('No independently verified DONE event');
 console.log(JSON.stringify({ proof: 'PASS', fixture, commit: done.commit, metadataCommit: done.metadataCommit, originalRepositoryUnchanged: true }));
