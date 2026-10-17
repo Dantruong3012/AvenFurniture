@@ -3,7 +3,7 @@
 Status: READY_FOR_REVIEW
 Changed paths: lib/types.ts, lib/validation/catalog.ts, lib/catalog/actions.ts, lib/catalog/queries.ts, components/admin/catalog-form.tsx, tests/catalog.test.mjs
 Commit: feat(collections-associations): implement approved task
-Commit hash: -
+Commit hash: 442c3f35cb03777162afe1ee3f00c20ac613e22a
 
 Implemented collection to product associations in product attributes without a database migration.
 
