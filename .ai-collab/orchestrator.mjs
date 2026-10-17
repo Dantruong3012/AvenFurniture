@@ -269,7 +269,7 @@ function replan() {
     const review = git('show', `${head}:${reviewPath}`);
     if (field(review, 'Status') !== 'APPROVED' || !/^Reviewer: Antigravity\b/m.test(review)) throw new Error('Replan runner review is not APPROVED by Antigravity');
     const metadata = new Set(['.ai-collab/BACKLOG.md', '.ai-collab/STATE.md', ...['PLAN.md', 'IMPLEMENTATION.md', 'REVIEW.md', 'IMPLEMENTATION_BRIEF.md', 'IMPLEMENTATION_SUMMARY.md', 'VERIFY_REPORT.md', 'REWORK.md'].map((name) => `.ai-collab/tasks/${id}/${name}`)]);
-    const allowedWorking = new Set([...metadata, ...(checkpoint.paths ?? []), ...(owned ?? [])]);
+    const allowedWorking = new Set([...metadata, ...(checkpoint.paths ?? [])]);
     if (changedWorkingPaths().some((path) => !allowedWorking.has(path))) throw new Error('Uncommitted changes outside blocked task metadata or task paths');
     const current = snapshot(root);
     if (current[planPath] === checkpoint.baseline?.[planPath]) throw new Error('Task plan has not changed since checkpoint');
@@ -793,7 +793,8 @@ async function taskLoop() {
       try {
         receipt = await agent('codex', 'implement', `Implement task ${checkpoint.task.id} using this compact ${handoff} handoff:\n${handoffText}\nOnly modify these exact paths: ${checkpoint.paths.join(', ')}. Do not stage/commit or edit coordinator artifacts. Feedback: ${checkpoint.feedback ?? 'Initial implementation'}. Return READY_FOR_REVIEW with actual changed paths and evidence, or BLOCKED.`, ['READY_FOR_REVIEW']);
       } catch (err) {
-        if (isAllowlistBlocker(err.structured || err.message) && (checkpoint.autoReplanCount ?? 0) < 2) {
+        const canInFlightReplan = (err.structured?.code === 'ALLOWLIST_EXCLUDED' || (Array.isArray(err.structured?.requestedPaths) && err.structured.requestedPaths.length > 0)) && (checkpoint.autoReplanCount ?? 0) < 2;
+        if (canInFlightReplan) {
           checkpoint.autoReplanCount = (checkpoint.autoReplanCount ?? 0) + 1;
           const requestedPaths = Array.isArray(err.structured?.requestedPaths) ? err.structured.requestedPaths : [];
           const replanPrompt = `Codex requested expanding authorized files during implementation of task ${checkpoint.task.id}.\nBlocker summary: ${err.structured?.summary ?? err.message}\nCurrently owned paths:\n${checkpoint.paths.map((p) => `- ${p}`).join('\n')}\nRequested paths:\n${requestedPaths.length ? requestedPaths.map((p) => `- ${p}`).join('\n') : '(Not explicitly listed; examine repository structure and test dependencies)'}\nApproved acceptance criteria: ${checkpoint.task.criteria}.\nExamine if adding these paths is safe and within the approved scope (no Production actions, no billing/deployment changes). Return READY with the complete revised list of paths in paths, or return BLOCKED if unauthorized.`;
