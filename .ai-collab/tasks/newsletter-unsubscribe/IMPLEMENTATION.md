@@ -3,7 +3,7 @@
 Status: READY_FOR_REVIEW
 Changed paths: app/api/newsletter/unsubscribe/route.ts, app/newsletter/unsubscribe/page.tsx, lib/newsletter/actions.ts, lib/newsletter/policy.ts, lib/newsletter/types.ts, tests/newsletter-policy.test.mjs
 Commit: feat(newsletter-unsubscribe): implement approved task
-Commit hash: -
+Commit hash: d8b20336b45a032bf0c9361cdc4c56394253d073
 
 Implemented encrypted, HMAC-signed unsubscribe links with 30-day expiry, an idempotent revocation route, and a confirmation page.
 
