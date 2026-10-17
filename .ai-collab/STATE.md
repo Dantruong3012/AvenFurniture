@@ -1,7 +1,7 @@
 # Workflow state
 
-Active task: -
-Current phase: IDLE
+Active task: collections-associations
+Current phase: APPROVED
 Last completed task: collections-data-policy
 Next task: collections-associations
 Blockers: -

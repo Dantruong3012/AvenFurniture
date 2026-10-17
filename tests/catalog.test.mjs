@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { loadModule } from "./helpers/load-module.mjs";
 const { validateCatalog, suggestSlug, catalogError } = loadModule("lib/validation/catalog.ts");
-const { collectionDefinitionSchema, collectionTaxonomySchema, collectionFilterSchema } = loadModule("lib/validation/catalog.ts");
+const { collectionDefinitionSchema, collectionTaxonomySchema, collectionFilterSchema, collectionSlugsSchema, collectionProductAssociationSchema, collectionProductAssociationsSchema } = loadModule("lib/validation/catalog.ts");
 const { collectionCatalog, resolveCollectionCatalog, collectionForProduct, collectionProductHref } = loadModule("lib/catalog/public.ts");
 const id = "00000000-0000-0000-0000-000000000001";
 const form = (overrides = {}) => {
@@ -69,6 +69,63 @@ test("collection filter schema defaults malformed or repeated values and bounds 
   assert.equal(parseCollectionFilters({ collection: "living", page: "0002" }).page, 1);
   assert.equal(collectionFilterSchema.safeParse({ collection: "living", q: "", material: "", price: "all", sort: "featured", page: "1" }).success, true);
 });
+test("collection product associations require existing collections, UUIDs and unique pairs", () => {
+  const valid = { productId: id, collectionSlug: "living" };
+  assert.equal(collectionProductAssociationSchema.safeParse(valid).success, true);
+  for (const association of [
+    { productId: "bad", collectionSlug: "living" },
+    { productId: id, collectionSlug: "unknown" },
+    { productId: id, collectionSlug: "Living" },
+    { ...valid, extra: true },
+  ]) assert.equal(collectionProductAssociationSchema.safeParse(association).success, false);
+  assert.equal(collectionProductAssociationsSchema.safeParse([valid, valid]).success, false);
+  assert.equal(collectionSlugsSchema.safeParse(["living", "living"]).success, false);
+  assert.equal(collectionSlugsSchema.safeParse(["living", "dining"]).success, true);
+  const selected = form({ collection_associations_present: "1" });
+  selected.append("collection_slugs", "living");
+  selected.append("collection_slugs", "dining");
+  assert.deepEqual(validateCatalog("products", selected).data.attributes.collection_slugs, ["living", "dining"]);
+  selected.append("collection_slugs", "living");
+  assert.match(validateCatalog("products", selected).fields.collection_slugs, /Duplicate/);
+  assert.ok(validateCatalog("products", form({ collection_associations_present: "1", collection_slugs: "unknown" })).fields.collection_slugs);
+  assert.ok(validateCatalog("products", form({ attributes: '{"collection_slugs":["unknown"]}' })).fields.attributes);
+  assert.ok(validateCatalog("products", form({ collection_associations_present: "1", attributes: '{"collection_slugs":[]}' })).fields.attributes);
+});
+test("collection queries resolve explicit memberships, legacy categories and unassociated products", () => {
+  const { resolveCollectionAssociations } = loadModule("lib/catalog/queries.ts", { "server-only": {}, "@/lib/auth/admin": {} });
+  const products = [
+    { id, category_id: "cat-living", attributes: {} },
+    { id: "00000000-0000-0000-0000-000000000002", category_id: "cat-living", attributes: { collection_slugs: ["dining"] } },
+    { id: "00000000-0000-0000-0000-000000000003", category_id: "other", attributes: {} },
+    { id: "00000000-0000-0000-0000-000000000004", category_id: "cat-living", attributes: { collection_slugs: [] } },
+    { id: "00000000-0000-0000-0000-000000000005", category_id: "cat-living", attributes: { collection_slugs: ["unknown"] } },
+  ];
+  const resolved = resolveCollectionAssociations(products, [{ id: "cat-living", slug: "living" }]);
+  assert.deepEqual(resolved.map((entry) => entry.productIds), [[id], [products[1].id], []]);
+  assert.equal(resolved[1].products[0], products[1]);
+});
+test("collection association read returns product records through the admin session", async () => {
+  const calls = [];
+  const rows = {
+    categories: [{ id: "cat-living", slug: "living" }],
+    products: [{ id, category_id: "cat-living", attributes: { collection_slugs: ["dining"] } }],
+  };
+  const supabase = { from: (table) => ({
+    select: () => ({ order: () => ({ range: async (start, end) => {
+      calls.push({ table, start, end });
+      return { data: rows[table], error: null };
+    } }) }),
+  }) };
+  const { readCollectionAssociations, readCollectionProducts } = loadModule("lib/catalog/queries.ts", {
+    "server-only": {}, "@/lib/auth/admin": { requireAdmin: async () => ({ supabase }) },
+  });
+  const resolved = await readCollectionAssociations();
+  assert.deepEqual(calls, [{ table: "categories", start: 0, end: 999 }, { table: "products", start: 0, end: 999 }]);
+  assert.deepEqual(resolved.map((entry) => entry.productIds), [[], [id], []]);
+  assert.equal(resolved[1].products[0], rows.products[0]);
+  assert.deepEqual((await readCollectionProducts("dining"))?.productIds, [id]);
+  assert.equal(await readCollectionProducts("unknown"), null);
+});
 function actions({ role = "staff", allow = true, rpcError = null } = {}) {
   const calls = [], invalidated = [];
   const supabase = { rpc: async (name, args) => { calls.push({ name, args }); return { error: rpcError, data: id }; } };
@@ -91,10 +148,19 @@ test("Server Actions enforce role and origin before any catalog writes", async (
 test("product action validates server input, uses caller RPC, preserves conflicts and invalidates only success", async () => {
   const a = actions();
   assert.ok((await a.saveProduct({}, form({ price: "-4" }))).fields.price); assert.equal(a.calls.length, 0);
+  assert.match((await a.saveProduct({}, form({ id: "not-a-uuid" }))).error, /Invalid record ID/); assert.equal(a.calls.length, 0);
   assert.ok((await a.saveProduct({}, form({ id, version: "0" }))).error); assert.equal(a.calls.length, 0);
   assert.ok((await a.saveProduct({}, form({ asset_ids: `${id},${id}` }))).error); assert.equal(a.calls.length, 0);
   await assert.rejects(a.saveProduct({}, form()), /redirect:\/admin\/products\?saved=1/);
-  assert.equal(a.calls[0].name, "save_catalog_product"); assert.equal(a.calls[0].args.p_id, null); assert.equal(a.invalidated.length, 1);
+  assert.equal(a.calls[0].name, "save_catalog_product"); assert.equal(a.calls[0].args.p_id, null); assert.equal(a.invalidated.length, 3);
+  const associated = form({ collection_associations_present: "1", attributes: '{"finish":"matte"}' });
+  associated.append("collection_slugs", "living");
+  await assert.rejects(a.saveProduct({}, associated), /redirect:\/admin\/products\?saved=1/);
+  assert.deepEqual(a.calls[1].args.p_data.attributes, { finish: "matte", collection_slugs: ["living"] });
+  const duplicate = form({ collection_associations_present: "1", collection_slugs: "living" });
+  duplicate.append("collection_slugs", "living");
+  assert.match((await a.saveProduct({}, duplicate)).fields.collection_slugs, /Duplicate/);
+  assert.equal(a.calls.length, 2);
   const conflict = actions({ rpcError: { code: "40001", message: "sensitive database text" } });
   const result = await conflict.saveProduct({}, form({ id, version: "1", name: "Keep my input" }));
   assert.equal(result.values.name, "Keep my input"); assert.match(result.error, /changed or was deleted/); assert.doesNotMatch(result.error, /sensitive/); assert.equal(conflict.invalidated.length, 0);

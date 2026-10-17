@@ -68,6 +68,23 @@ export type CollectionFilterQuery = {
   page: number;
 };
 
+/** Explicit membership is stored in products.attributes.collection_slugs. */
+export interface CollectionProductAssociation {
+  collectionSlug: string;
+  productId: string;
+}
+
+export type CollectionAssociationPayload = {
+  productId: string;
+  collectionSlugs: string[];
+};
+
+export type CollectionWithProducts = {
+  collection: CollectionDefinition;
+  productIds: string[];
+  products: Tables<"products">[];
+};
+
 /** Frontmatter of a locally committed .md journal article. Dates are ISO calendar dates (YYYY-MM-DD). */
 export interface JournalFrontmatter {
   slug: string;
