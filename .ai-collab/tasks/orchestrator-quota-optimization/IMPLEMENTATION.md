@@ -1,6 +1,7 @@
 # Implementation: orchestrator-quota-optimization
 
-Status: READY_FOR_REVIEW
+Status: DONE
+Commit hash: 26fe5d5b71854359578397e1ddea20f244832ff7
 
 ## Implementation evidence
 
