@@ -9,6 +9,8 @@ import { inquiryStatuses } from "@/lib/validation/inquiry";
 import type { AdminInquiryActionState, AdminInquiryDetail, AdminInquirySummary, InquiryPortalQuery } from "@/lib/types";
 
 const labels = { all: "All", new: "New", consulting: "Consulting", completed: "Completed", cancelled: "Cancelled" };
+type InquiryMetrics = { total: number; byStatus: Record<(typeof inquiryStatuses)[number], { count: number; percentage: number }>; last7Days: number; last30Days: number };
+const emptyMetrics: InquiryMetrics = { total: 0, byStatus: { new: { count: 0, percentage: 0 }, consulting: { count: 0, percentage: 0 }, completed: { count: 0, percentage: 0 }, cancelled: { count: 0, percentage: 0 } }, last7Days: 0, last30Days: 0 };
 
 function inquiryHref(filters: InquiryPortalQuery, changes: Partial<InquiryPortalQuery> = {}) {
   const next = { ...filters, inquiry: undefined, ...changes };
@@ -108,12 +110,22 @@ function InquiryDrawer({ id, detail, closeHref, currentUserId }: { id: string; d
   </dialog>;
 }
 
-export function InquiryPortal({ inquiries, count, pageSize, filters, detail, currentUserId }: {
-  inquiries: AdminInquirySummary[]; count: number; pageSize: number; filters: InquiryPortalQuery; detail: AdminInquiryDetail | null; currentUserId: string;
+export function InquiryPortal({ inquiries, count, pageSize, filters, detail, currentUserId, metrics = emptyMetrics }: {
+  inquiries: AdminInquirySummary[]; count: number; pageSize: number; filters: InquiryPortalQuery; detail: AdminInquiryDetail | null; currentUserId: string; metrics?: InquiryMetrics;
 }) {
   const pages = Math.max(1, Math.min(10000, Math.ceil(count / pageSize)));
   return <>
     <header className="admin-header"><div><p className="section-note">Customer requests</p><h1>Inquiries</h1><p>Follow up on contact messages and product quote requests.</p></div></header>
+    <section className="inquiry-analytics" aria-label="Inquiry analytics">
+      <article><h2>Total inquiries</h2><p>{metrics.total}</p></article>
+      {inquiryStatuses.map((status) => <article key={status}><h2>{labels[status]}</h2><p>{metrics.byStatus[status].count} <small>({metrics.byStatus[status].percentage}%)</small></p></article>)}
+      <article><h2>Last 7 days</h2><p>{metrics.last7Days}</p></article><article><h2>Last 30 days</h2><p>{metrics.last30Days}</p></article>
+    </section>
+    <form action="/api/admin/inquiries/export" method="get" className="admin-toolbar inquiry-export">
+      <label>Status <select name="status" defaultValue={filters.status}><option value="all">All statuses</option>{inquiryStatuses.map((status) => <option key={status} value={status}>{labels[status]}</option>)}</select></label>
+      <label>From <input type="date" name="from" /></label><label>To <input type="date" name="to" /></label>
+      <button className="btn" type="submit">Export CSV</button>
+    </form>
     <nav className="inquiry-filters" aria-label="Inquiry status">{(["all", ...inquiryStatuses] as const).map((status) => <Link key={status} href={inquiryHref(filters, { status, page: 1 })} aria-current={filters.status === status ? "page" : undefined}>{labels[status]}</Link>)}</nav>
     <form action="/admin/inquiries" method="get" className="admin-toolbar inquiry-search" role="search">
       <input type="hidden" name="status" value={filters.status} />
@@ -133,6 +145,13 @@ export function InquiryPortal({ inquiries, count, pageSize, filters, detail, cur
       .inquiry-filters :global(a[aria-current=page]) { background: var(--ink); color: white; }
       .inquiry-pagination :global(a) { padding: 10px; text-decoration: underline; }
       .inquiry-search { margin-top: 0; flex-wrap: wrap; }
+      .inquiry-analytics { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 12px; margin: 24px 0; }
+      .inquiry-analytics article { border: 1px solid var(--line); background: white; padding: 16px; }
+      .inquiry-analytics h2 { margin: 0 0 8px; font-size: .8rem; font-weight: 500; }
+      .inquiry-analytics p { margin: 0; font-size: 1.35rem; font-weight: 700; }
+      .inquiry-analytics small { color: var(--muted); font-size: .8rem; }
+      .inquiry-export { margin: 0 0 24px; flex-wrap: wrap; }
+      .inquiry-export label { display: flex; align-items: center; gap: 8px; }
       .inquiry-search label { min-width: 0; }
       .inquiry-search input[type=search] { width: 100%; min-width: 0; }
       .inquiry-search input:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }

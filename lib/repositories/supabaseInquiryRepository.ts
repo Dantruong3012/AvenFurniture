@@ -9,6 +9,13 @@ export type { AdminInquirySummary, AdminInquiryDetail } from "@/lib/types";
 
 export type InquirySubmissionResult = Database["public"]["Functions"]["submit_customer_inquiry"]["Returns"][number];
 export type AdminInquiryFilters = { page?: number; pageSize?: number; status?: InquiryStatus | "all"; q?: string };
+export type AdminInquiryDateFilters = { status?: InquiryStatus | "all"; from?: string; to?: string };
+export type AdminInquiryMetrics = {
+  total: number;
+  byStatus: Record<InquiryStatus, { count: number; percentage: number }>;
+  last7Days: number;
+  last30Days: number;
+};
 const summaryColumns = "id,reference,created_at,contact_name,contact_phone,contact_email,source,status" as const;
 
 /** Call from a trusted server entry point after its request/rate-limit checks.
@@ -62,6 +69,57 @@ export async function listAdminInquiries(supabase: SupabaseClient<Database>, fil
   const { data, count, error } = await query.order("created_at", { ascending: false }).order("id", { ascending: false }).range((page - 1) * pageSize, page * pageSize - 1);
   if (error) throw new Error("Inquiries are temporarily unavailable.");
   return { inquiries: (data ?? []).map(({ inquiry_items, ...inquiry }) => ({ ...inquiry, item_count: inquiry_items[0]?.count ?? 0 })), count: count ?? 0 };
+}
+
+function validateAdminInquiryDateFilters(filters: AdminInquiryDateFilters) {
+  const { status, from, to } = filters;
+  if (status !== undefined && status !== "all" && !inquiryStatuses.includes(status)) throw new Error("Choose a valid inquiry status.");
+  for (const value of [from, to]) {
+    if (value !== undefined && (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(`${value}T00:00:00.000Z`)) || new Date(`${value}T00:00:00.000Z`).toISOString().slice(0, 10) !== value)) {
+      throw new Error("Choose valid inquiry dates.");
+    }
+  }
+  if (from && to && from > to) throw new Error("The start date must be on or before the end date.");
+}
+
+/** Counts use the caller's RLS-scoped client and omit soft-deleted inquiries. */
+export async function getAdminInquiryMetrics(supabase: SupabaseClient<Database>, now = new Date()): Promise<AdminInquiryMetrics> {
+  const countQuery = () => supabase.from("inquiries").select("id", { count: "exact", head: true }).is("deleted_at", null);
+  const statusQueries = inquiryStatuses.map(async (status) => {
+    const { count, error } = await countQuery().eq("status", status);
+    if (error) throw new Error("Inquiry metrics are temporarily unavailable.");
+    return [status, count ?? 0] as const;
+  });
+  const sevenDays = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const thirtyDays = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const [statusCounts, last7, last30] = await Promise.all([
+    Promise.all(statusQueries),
+    countQuery().gte("created_at", sevenDays),
+    countQuery().gte("created_at", thirtyDays),
+  ]);
+  if (last7.error || last30.error) throw new Error("Inquiry metrics are temporarily unavailable.");
+  const byStatus = Object.fromEntries(statusCounts.map(([status, count]) => [status, { count, percentage: 0 }])) as AdminInquiryMetrics["byStatus"];
+  const total = statusCounts.reduce((sum, [, count]) => sum + count, 0);
+  for (const status of inquiryStatuses) byStatus[status].percentage = total ? Math.round((byStatus[status].count / total) * 1000) / 10 : 0;
+  return { total, byStatus, last7Days: last7.count ?? 0, last30Days: last30.count ?? 0 };
+}
+
+/** Export in bounded pages so large inquiry histories do not hit PostgREST's row cap. */
+export async function listAdminInquiriesForExport(supabase: SupabaseClient<Database>, filters: AdminInquiryDateFilters = {}) {
+  validateAdminInquiryDateFilters(filters);
+  const rows: Array<Pick<Tables<"inquiries">, "id" | "created_at" | "status" | "contact_name" | "contact_email" | "contact_phone" | "message"> & { inquiry_items: Array<{ product_id: string | null }> }> = [];
+  const pageSize = 500;
+  for (let offset = 0; ; offset += pageSize) {
+    let query = supabase.from("inquiries").select("id,created_at,status,contact_name,contact_email,contact_phone,message,inquiry_items(product_id)")
+      .is("deleted_at", null).order("created_at", { ascending: false }).order("id", { ascending: false }).range(offset, offset + pageSize - 1);
+    if (filters.status && filters.status !== "all") query = query.eq("status", filters.status);
+    if (filters.from) query = query.gte("created_at", `${filters.from}T00:00:00.000Z`);
+    if (filters.to) query = query.lt("created_at", new Date(Date.parse(`${filters.to}T00:00:00.000Z`) + 24 * 60 * 60 * 1000).toISOString());
+    const { data, error } = await query;
+    if (error) throw new Error("Inquiry export is temporarily unavailable.");
+    rows.push(...(data ?? []));
+    if (!data || data.length < pageSize) return rows;
+  }
 }
 
 export async function getAdminInquiryById(supabase: SupabaseClient<Database>, id: string): Promise<AdminInquiryDetail | null> {

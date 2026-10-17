@@ -115,6 +115,7 @@ const detail = { ...summary, message: "  Verbatim\n<script>alert(1)</script>  ",
 
 test("inquiry page authorizes before reads and forwards validated paging, filters and selected ID", async () => {
   const calls = [], client = {};
+  const metrics = { total: 1, byStatus: { new: { count: 1, percentage: 100 }, consulting: { count: 0, percentage: 0 }, completed: { count: 0, percentage: 0 }, cancelled: { count: 0, percentage: 0 } }, last7Days: 1, last30Days: 1 };
   const page = loadTsx("app/admin/(protected)/inquiries/page.tsx", {
     "next/link": { default: Link },
     "@/lib/auth/admin": { requireAdmin: async () => { calls.push("auth"); return { supabase: client, user: { id } }; } },
@@ -123,6 +124,7 @@ test("inquiry page authorizes before reads and forwards validated paging, filter
     "@/lib/repositories/supabaseInquiryRepository": {
       listAdminInquiries: async (...args) => { calls.push(["list", ...args]); return { inquiries: [summary], count: 30 }; },
       getAdminInquiryById: async (...args) => { calls.push(["detail", ...args]); return detail; },
+      getAdminInquiryMetrics: async () => metrics,
     },
   }).default;
   const result = await page({ searchParams: Promise.resolve({ page: "2", q: " Customer ", status: "all", inquiry: id }) });
@@ -130,6 +132,7 @@ test("inquiry page authorizes before reads and forwards validated paging, filter
   assert.deepEqual(calls[1], ["list", client, { page: 2, pageSize: 25, q: "Customer", status: "all", inquiry: id }]);
   assert.deepEqual(calls[2], ["detail", client, id]);
   assert.equal(result.props.detail, detail);
+  assert.equal(result.props.metrics, metrics);
   assert.equal(result.props.currentUserId, id);
   calls.length = 0;
   const invalid = await page({ searchParams: Promise.resolve({ inquiry: "bad" }) });

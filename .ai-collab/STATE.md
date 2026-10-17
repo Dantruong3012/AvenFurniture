@@ -1,7 +1,7 @@
 # Workflow state
 
-Active task: -
-Current phase: IDLE
+Active task: admin-inquiry-export-metrics
+Current phase: APPROVED
 Last completed task: storefront-consultant-zalo
 Next task: admin-inquiry-export-metrics
 Blockers: -

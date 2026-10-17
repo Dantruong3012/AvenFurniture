@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { requireAdmin } from "@/lib/auth/admin";
-import { getAdminInquiryById, listAdminInquiries } from "@/lib/repositories/supabaseInquiryRepository";
+import { getAdminInquiryById, getAdminInquiryMetrics, listAdminInquiries } from "@/lib/repositories/supabaseInquiryRepository";
 import { parseInquiryPortalQuery } from "@/lib/validation/inquiry";
 import { InquiryPortal } from "@/components/admin/inquiry-portal";
 
@@ -12,7 +12,10 @@ export default async function InquiriesPage({ searchParams }: { searchParams: Pr
     return <section><h1>Inquiries</h1><p role="alert">Invalid inquiry filters. Use a valid status, page, and search of at most 200 characters.</p><Link href="/admin/inquiries">Reset filters</Link></section>;
   }
   const pageSize = 25;
-  const { inquiries, count } = await listAdminInquiries(supabase, { ...filters, pageSize });
+  const [{ inquiries, count }, metrics] = await Promise.all([
+    listAdminInquiries(supabase, { ...filters, pageSize }),
+    getAdminInquiryMetrics(supabase),
+  ]);
   const detail = filters.inquiry ? await getAdminInquiryById(supabase, filters.inquiry) : null;
-  return <InquiryPortal inquiries={inquiries} count={count} pageSize={pageSize} filters={filters} detail={detail} currentUserId={user.id} />;
+  return <InquiryPortal inquiries={inquiries} count={count} pageSize={pageSize} filters={filters} detail={detail} currentUserId={user.id} metrics={metrics} />;
 }
