@@ -3,7 +3,7 @@
 Status: READY_FOR_REVIEW
 Changed paths: lib/github/client.ts, lib/github/reconciliation.ts, lib/github/status-checks.ts, lib/github/changelog.ts, lib/github/types.ts, tests/github-ci.test.mjs
 Commit: feat(release-m4-github-ci): implement approved task
-Commit hash: -
+Commit hash: 789b51206a3009d4acee75aabd66c2f7c7446351
 
 Implemented the GitHub REST adapter, PR reconciliation, CI check summaries, and conventional changelog generation.
 

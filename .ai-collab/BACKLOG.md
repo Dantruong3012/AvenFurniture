@@ -12,7 +12,7 @@ Only Antigravity adds tasks from a roadmap approved by the user. Use a unique lo
 | email-outbox-dispatch | P1 | inquiry-service-layer | Codex | DONE | Outbox worker with locking, exponential retry, and mock/staging mailer | d334ac5c23d3d41d0f22848a11d06260c6bd751e |
 | storefront-consultant-zalo | P1 | storefront-inquiry-forms | Codex | DONE | Consultant profile directory, public Zalo direct contact integration, and admin management | 24a596140c46f2c385a892ebb44d640a8564ac39 |
 | admin-inquiry-export-metrics | P1 | admin-inquiry-portal | Codex | DONE | Inquiry metrics calculation, status aggregation, CSV export endpoint and admin analytics controls | 1298ba9be55d2405720d7542b0f0d79e4c8e296b |
-| release-m4-github-ci | P1 | admin-inquiry-portal | Codex | APPROVED | GitHub API adapter for PR reconciliation, CI status checks synchronization and changelog generation | - |
+| release-m4-github-ci | P1 | admin-inquiry-portal | Codex | DONE | GitHub API adapter for PR reconciliation, CI status checks synchronization and changelog generation | 789b51206a3009d4acee75aabd66c2f7c7446351 |
 | release-m5-controlled-merge | P1 | release-m4-github-ci | Codex | BACKLOG | Controlled merge coordinator with signed authorization, branch protection and merge validation | - |
 | release-m6-production-tracking | P1 | release-m5-controlled-merge | Codex | BACKLOG | Vercel Production deployment observer matching merged commit SHA with error boundary | - |
 | storefront-customer-portal | P2 | inquiry-service-layer | Codex | BACKLOG | Customer order inquiry lookup portal, verification by phone or email and order history view | - |

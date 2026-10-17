@@ -1,10 +1,10 @@
 # Workflow state
 
-Active task: release-m4-github-ci
-Current phase: APPROVED
-Last completed task: admin-inquiry-export-metrics
+Active task: -
+Current phase: IDLE
+Last completed task: release-m4-github-ci
 Next task: -
 Blockers: -
-Last successful commit: 1298ba9be55d2405720d7542b0f0d79e4c8e296b
+Last successful commit: 789b51206a3009d4acee75aabd66c2f7c7446351
 
 This is the current pointer, not a substitute for `BACKLOG.md` or the task artifacts. Update it at each handoff. Do not mark a task `DONE` until its tests, Antigravity review, and commit are verified.
