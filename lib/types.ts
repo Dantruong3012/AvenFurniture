@@ -13,6 +13,19 @@ export type AdminInquiryDetail = Omit<AdminInquirySummary, "item_count"> & {
 export type InquiryPortalQuery = { page: number; q: string; status: InquiryStatus | "all"; inquiry?: string };
 export type AdminInquiryActionState = { error?: string; success?: string };
 
+/** Aggregate delivery metrics only; no individual outbox record crosses this boundary. */
+export type OutboxHealthSummary = {
+  total: number;
+  pending: number;
+  processing: number;
+  sent: number;
+  failed: number;
+  deadLetter: number;
+  retryBacklog: number;
+  oldestPendingAgeSeconds: number | null;
+  failureRatePercent: number;
+};
+
 export interface CartItem {
   productId: string;
   quantity: number;

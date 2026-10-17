@@ -1,7 +1,7 @@
 # Workflow state
 
-Active task: -
-Current phase: IDLE
+Active task: outbox-admin-health
+Current phase: APPROVED
 Last completed task: outbox-operations
 Next task: -
 Blockers: -

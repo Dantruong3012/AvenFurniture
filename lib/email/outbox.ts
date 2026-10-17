@@ -1,6 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/lib/supabase/database.types";
+import type { OutboxHealthSummary } from "@/lib/types";
 import { renderEmailTemplate } from "./templates";
 import type { DeliveryOutcome, DispatchResult, OutboxLoopOptions, OutboxRecord, OutboxStore, OutboxWorkerOptions, RetryPolicy } from "./types";
 
@@ -92,6 +93,34 @@ export async function inspectOutboxHealth(client: SupabaseClient<Database>, now 
   if (counts.some(({ error, count }) => error || count === null)) throw new Error("Unable to inspect email outbox.");
   const [pending, processing, failed, sent, due] = counts.map(({ count }) => count!);
   return { pending, processing, failed, sent, due, deadLetter: failed };
+}
+
+/** Admin dashboard projection. Only a pending timestamp is read in addition to
+ * count-only queries; individual records and delivery details are never returned.
+ */
+export async function getOutboxHealthSummary(client: SupabaseClient<Database>, now = Date.now()): Promise<OutboxHealthSummary> {
+  const counts = await inspectOutboxHealth(client, now);
+  let oldestPendingAgeSeconds: number | null = null;
+  if (counts.pending > 0) {
+    const { data, error } = await client.from("email_outbox").select("created_at")
+      .eq("status", "pending").order("created_at", { ascending: true }).limit(1);
+    if (error) throw new Error("Unable to inspect email outbox.");
+    // A worker may complete the last pending row between the count and this read.
+    if (data?.[0]) {
+      const createdAt = Date.parse(data[0].created_at);
+      if (!Number.isFinite(createdAt)) throw new Error("Unable to inspect email outbox.");
+      oldestPendingAgeSeconds = Math.max(0, Math.floor((now - createdAt) / 1000));
+    }
+  }
+  const { pending, processing, sent, failed, deadLetter, due } = counts;
+  const completed = sent + failed;
+  return {
+    total: pending + processing + completed,
+    pending, processing, sent, failed, deadLetter,
+    retryBacklog: due,
+    oldestPendingAgeSeconds,
+    failureRatePercent: completed === 0 ? 0 : Math.round((failed / completed) * 100),
+  };
 }
 
 /** Retry only the specified IDs, or a bounded batch of failed rows when IDs are

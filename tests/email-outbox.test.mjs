@@ -6,7 +6,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { createClient } from "@supabase/supabase-js";
 import { loadModule } from "./helpers/load-module.mjs";
 
-const { calculateRetryDelay, createSupabaseOutboxStore, dispatchOutboxBatch, dispatchScopedOutboxRetry, inspectOutboxHealth, runOutboxWorker } = loadModule("lib/email/outbox.ts", { "server-only": {} });
+const { calculateRetryDelay, createSupabaseOutboxStore, dispatchOutboxBatch, dispatchScopedOutboxRetry, getOutboxHealthSummary, inspectOutboxHealth, runOutboxWorker } = loadModule("lib/email/outbox.ts", { "server-only": {} });
 const { createMockMailer, createStagingMailer, createConsoleMailer } = loadModule("lib/email/mailer.ts", { "server-only": {} });
 const message = { to: "customer@example.com", subject: "Inquiry received", text: "Thank you", html: "<p>Thank you</p>" };
 const delivery = (idempotencyKey = randomUUID()) => ({ idempotencyKey, signal: new AbortController().signal });
@@ -116,11 +116,13 @@ async function database(t) {
       if (options.method === "PATCH") sql = `with changed as (update email_outbox set ${assignments}${where} returning *) select row_to_json(changed) as row from changed`;
       else if (options.method === "HEAD") sql = `select count(*)::int as total from email_outbox${where}`;
       else {
+        const selection = params.get("select") ?? "*";
+        const projection = selection === "*" ? "*" : selection.split(",").map(column).join(",");
         const ordering = params.get("order")?.split(",").map((part) => {
           const [name, direction] = part.split(".");
           assert.equal(direction, "asc"); return `${column(name)} asc`;
         }).join(",");
-        sql = `select row_to_json(rows) as row from (select * from email_outbox${where}${ordering ? ` order by ${ordering}` : ""}${params.has("limit") ? ` limit ${param(Number(params.get("limit")))}` : ""}) rows`;
+        sql = `select row_to_json(rows) as row from (select ${projection} from email_outbox${where}${ordering ? ` order by ${ordering}` : ""}${params.has("limit") ? ` limit ${param(Number(params.get("limit")))}` : ""}) rows`;
       }
       const { rows } = await db.query(sql, values);
       if (options.method === "HEAD") return new Response(null, { status: 200, headers: { "content-range": `*/${rows[0].total}` } });
@@ -149,17 +151,38 @@ test("outbox integration with real query builder and isolated PostgreSQL", async
   }
 
   await scenario("health reports exact status, dead-letter and currently due counts", async () => {
-    await insert();
-    await insert({ next_attempt_at: iso(epoch + 1) });
+    await insert({ created_at: iso(epoch - 61_000) });
+    await insert({ next_attempt_at: iso(epoch + 1), created_at: iso(epoch - 30_000) });
     await insert({ status: "processing", attempts: 1, locked_until: iso(epoch - 1) });
     await insert({ status: "processing", attempts: 1, locked_until: iso(epoch + 1) });
-    await insert({ status: "failed", attempts: 5 });
+    await insert({ status: "failed", attempts: 5, last_error: "customer@example.com Private delivery failure" });
     await insert({ status: "sent" });
     assert.deepEqual(await inspectOutboxHealth(fixture.client(), epoch), {
       pending: 2, processing: 2, failed: 1, sent: 1, due: 2, deadLetter: 1,
     });
     assert.equal(fixture.requests.filter(({ method }) => method === "HEAD").length, 5);
     assert.equal((await inspectOutboxHealth(fixture.client(), epoch + 1)).due, 4);
+    const before = fixture.requests.length;
+    const summary = await getOutboxHealthSummary(fixture.client(), epoch);
+    assert.deepEqual(summary, {
+      total: 6, pending: 2, processing: 2, sent: 1, failed: 1, deadLetter: 1,
+      retryBacklog: 2, oldestPendingAgeSeconds: 61, failureRatePercent: 50,
+    });
+    assert.doesNotMatch(JSON.stringify(summary), /customer@example.com|Private delivery failure/);
+    const reads = fixture.requests.slice(before);
+    assert.equal(reads.filter(({ method }) => method === "HEAD").length, 5);
+    assert.equal(reads.filter(({ method }) => method === "GET").length, 1);
+    assert.ok(reads.every(({ method, params }) => method === "HEAD" ? params.get("select") === "id" : params.get("select") === "created_at"));
+    assert.ok(reads.every(({ method }) => method !== "PATCH"));
+  });
+
+  await scenario("empty outbox health has zero rates and no record query", async () => {
+    const before = fixture.requests.length;
+    assert.deepEqual(await getOutboxHealthSummary(fixture.client(), epoch), {
+      total: 0, pending: 0, processing: 0, sent: 0, failed: 0, deadLetter: 0,
+      retryBacklog: 0, oldestPendingAgeSeconds: null, failureRatePercent: 0,
+    });
+    assert.ok(fixture.requests.slice(before).every(({ method }) => method === "HEAD"));
   });
 
   await scenario("selected retry sends only due IDs through the worker and resets failed attempt budget", async () => {
@@ -400,8 +423,26 @@ test("database errors are sanitized for listing, claiming and saving", async () 
   await assert.rejects(store.claim(row, epoch, 1000, 5), safe);
   await assert.rejects(store.finish({ ...row, status: "processing", locked_until: iso(epoch + 1000) }, epoch, { status: "sent", messageId: "receipt" }), safe);
   await assert.rejects(inspectOutboxHealth(client, epoch), (error) => error.message === "Unable to inspect email outbox.");
+  await assert.rejects(getOutboxHealthSummary(client, epoch), (error) => error.message === "Unable to inspect email outbox.");
   await assert.rejects(dispatchScopedOutboxRetry({ client, ids: [row.id], mailer: createMockMailer(), buildMessage: async () => message, now: () => epoch }),
     (error) => error.message === "Unable to read email outbox for retry.");
+});
+
+test("health tolerates a pending row completing between count and age reads", async () => {
+  const client = createClient("https://outbox-test.invalid", "test-key", {
+    auth: { persistSession: false, autoRefreshToken: false },
+    global: { fetch: async (url, options) => {
+      const { searchParams } = new URL(url);
+      if (options.method === "HEAD") return new Response(null, { status: 200, headers: { "content-range": `*/${searchParams.get("status") === "eq.pending" ? 1 : 0}` } });
+      assert.equal(options.method, "GET");
+      assert.equal(searchParams.get("select"), "created_at");
+      return new Response("[]", { status: 200, headers: { "content-type": "application/json" } });
+    } },
+  });
+  assert.deepEqual(await getOutboxHealthSummary(client, epoch), {
+    total: 1, pending: 1, processing: 0, sent: 0, failed: 0, deadLetter: 0,
+    retryBacklog: 0, oldestPendingAgeSeconds: null, failureRatePercent: 0,
+  });
 });
 
 test("scoped retry rejects invalid selection before accessing storage", async () => {
