@@ -73,9 +73,9 @@ test("MVP migration and RLS on isolated PostgreSQL", async (t) => {
   const rejects = (sql, params = [], code = "42501") => assert.rejects(db.query(sql, params), (error) =>
     code === "23503" ? ["23503", "23001"].includes(error.code) : error.code === code);
 
-  await t.test("all thirteen public tables have RLS enabled", async () => {
+  await t.test("all fifteen public tables have RLS enabled", async () => {
     const { rows } = await db.query("select relname, relrowsecurity from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r'");
-    assert.equal(rows.length, 13);
+    assert.equal(rows.length, 15);
     assert.ok(rows.every((row) => row.relrowsecurity));
   });
   await t.test("newsletter roster requires a current staff session", async () => {

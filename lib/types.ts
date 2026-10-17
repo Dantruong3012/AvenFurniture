@@ -40,6 +40,24 @@ export type InquiryConfirmation = {
   is_duplicate: boolean;
 };
 
+/** A guest contact is a delivery address, never an Auth identity. */
+export type CustomerIdentity =
+  | { kind: "guest" }
+  | { kind: "authenticated"; userId: string; email: string | null; emailVerified: boolean; sessionValid: boolean };
+
+/** Customer profile fields are optional and separate from staff accounts. */
+export type CustomerProfileInput = { displayName: string; contactPhone: string | null };
+
+/** A trusted service must verify this particular inquiry's contact channel. */
+export type CustomerInquiryOwnership = {
+  inquiryId: string;
+  verifiedContactEmail: string;
+  contactVerified: boolean;
+};
+
+/** Guest wishlist entries stay client-side; authenticated entries store product IDs. */
+export type CustomerWishlistItem = { productId: string; createdAt?: string };
+
 export interface Collection {
   name: string;
   slug: string;

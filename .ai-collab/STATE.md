@@ -1,7 +1,7 @@
 # Workflow state
 
-Active task: -
-Current phase: IDLE
+Active task: customer-identity-policy
+Current phase: APPROVED
 Last completed task: staff-role-status
 Next task: customer-identity-policy
 Blockers: -

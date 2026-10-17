@@ -3,9 +3,9 @@
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth/admin";
 import { allowAuthMutation } from "@/lib/auth/mutation";
-import { addAdminInquiryNote, isActiveInquiryStaff, listActiveInquiryStaff as queryActiveInquiryStaff, lookupCustomerInquiries as queryCustomerInquiries, updateAdminInquiryAssignment, updateAdminInquiryStatus } from "@/lib/repositories/supabaseInquiryRepository";
+import { addAdminInquiryNote, isActiveInquiryStaff, listActiveInquiryStaff as queryActiveInquiryStaff, updateAdminInquiryAssignment, updateAdminInquiryStatus } from "@/lib/repositories/supabaseInquiryRepository";
 import { uuidPattern } from "@/lib/validation/catalog";
-import { inquiryStatuses, validateCustomerInquiryLookup, validateInquiryAssignment, validateInquiryNote, type InquiryStatus } from "@/lib/validation/inquiry";
+import { inquiryStatuses, validateInquiryAssignment, validateInquiryNote, type InquiryStatus } from "@/lib/validation/inquiry";
 import type { AdminInquiryActionState } from "@/lib/types";
 
 export async function getActiveInquiryStaff() {
@@ -65,27 +65,4 @@ export async function changeInquiryAssignment(_previous: AdminInquiryActionState
   }
   revalidatePath("/admin/inquiries");
   return { success: assignment.assignedTo ? "Staff assigned." : "Staff unassigned." };
-}
-
-export type CustomerInquiryLookupState = {
-  inquiries?: Awaited<ReturnType<typeof queryCustomerInquiries>>;
-  error?: string;
-  message?: string;
-};
-
-/** Public lookup is exact-match, same-origin, rate-limited and deliberately
- * returns no contact fields or private consultant notes to the browser.
- */
-export async function lookupCustomerInquiries(_previous: CustomerInquiryLookupState, form: FormData): Promise<CustomerInquiryLookupState> {
-  const identifier = validateCustomerInquiryLookup({ type: form.get("type"), value: form.get("value") });
-  if (!identifier) return { error: "Enter a valid email address or phone number." };
-  if (!(await allowAuthMutation("customer-inquiry-lookup", identifier.value, 5))) {
-    return { error: "Too many lookup attempts. Wait a while and try again." };
-  }
-  try {
-    const inquiries = await queryCustomerInquiries(identifier);
-    return { inquiries, message: inquiries.length ? undefined : "No matching inquiries found. Check the contact detail and try again." };
-  } catch {
-    return { error: "Your inquiries are temporarily unavailable. Please try again later." };
-  }
 }

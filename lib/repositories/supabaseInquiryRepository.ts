@@ -3,7 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/lib/supabase/admin";
 import type { Database, Tables } from "@/lib/supabase/database.types";
 import { uuidPattern } from "@/lib/validation/catalog";
-import { inquiryError, inquiryStatuses, validateCustomerInquiryInput, validateInquiryNote, type CustomerInquiryInput, type CustomerInquiryLookup, type InquiryStatus } from "@/lib/validation/inquiry";
+import { inquiryError, inquiryStatuses, validateCustomerInquiryInput, validateInquiryNote, type CustomerInquiryInput, type InquiryStatus } from "@/lib/validation/inquiry";
 import type { AdminInquirySummary, AdminInquiryDetail } from "@/lib/types";
 export type { AdminInquirySummary, AdminInquiryDetail } from "@/lib/types";
 
@@ -25,17 +25,15 @@ export type CustomerInquiryRecord = Pick<Tables<"inquiries">, "reference" | "cre
   inquiry_items: Pick<Tables<"inquiry_items">, "id" | "product_name" | "product_slug" | "quantity" | "unit_price" | "currency">[];
 };
 
-/** Exact contact match, bounded result set, and a customer-safe projection.
- * Internal consultant notes and assignment details never leave this repository.
+/** Read with the caller's Auth client and RLS, never a service client.
+ * Explicit ownership also prevents a staff session from listing all inquiries here.
  */
-export async function lookupCustomerInquiries(identifier: CustomerInquiryLookup): Promise<CustomerInquiryRecord[]> {
+export async function listCustomerInquiries(supabase: SupabaseClient<Database>, customerUserId: string): Promise<CustomerInquiryRecord[]> {
+  requireId(customerUserId);
   const columns = "reference,created_at,status,message,inquiry_items(id,product_name,product_slug,quantity,unit_price,currency)";
-  let query = createServiceClient().from("inquiries").select(columns).is("deleted_at", null);
-  if (identifier.type === "email") {
-    const exact = `"${identifier.value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
-    query = query.ilike("contact_email", exact);
-  } else query = query.eq("contact_phone", identifier.value);
-  const { data, error } = await query.order("created_at", { ascending: false }).order("id", { ascending: false }).limit(50);
+  const { data, error } = await supabase.from("inquiries").select(columns)
+    .filter("customer_user_id", "eq", customerUserId).is("deleted_at", null)
+    .order("created_at", { ascending: false }).order("id", { ascending: false }).limit(50);
   if (error) throw new Error("Customer inquiries are temporarily unavailable.");
   return (data ?? []) as unknown as CustomerInquiryRecord[];
 }
