@@ -1,10 +1,10 @@
 # Workflow state
 
-Active task: collections-filter
-Current phase: APPROVED
-Last completed task: collections-associations
-Next task: collections-filter
+Active task: -
+Current phase: IDLE
+Last completed task: collections-filter
+Next task: -
 Blockers: -
-Last successful commit: 442c3f35cb03777162afe1ee3f00c20ac613e22a
+Last successful commit: 9dea1114805e955c9563313de236382690b6cc34
 
 This is the current pointer, not a substitute for `BACKLOG.md` or the task artifacts. Update it at each handoff. Do not mark a task `DONE` until its tests, Antigravity review, and commit are verified.

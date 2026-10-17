@@ -3,7 +3,7 @@
 Status: READY_FOR_REVIEW
 Changed paths: app/collections/page.tsx, components/product/catalog-client.tsx, lib/catalog/public.ts, lib/catalog/queries.ts, lib/validation/catalog.ts, tests/catalog.test.mjs, tests/e2e/catalog.spec.ts
 Commit: feat(collections-filter): implement approved task
-Commit hash: -
+Commit hash: 9dea1114805e955c9563313de236382690b6cc34
 
 Implemented collection scoped product browsing with filters, sorting, pagination, and distinct empty states.
 

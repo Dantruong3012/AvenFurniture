@@ -34,7 +34,7 @@ Only Antigravity adds tasks from a roadmap approved by the user. Each task also 
 | journal-articles | P1 | journal-content-policy | Codex | DONE | APPROVED | Working listing, article detail pages, static Markdown rendering, SEO metadata and Zalo CTA | 8623f7e3f626d1df587ac99ce87180f30797b2c5 |
 | collections-data-policy | P1 | - | Antigravity | DONE | APPROVED | Approve collection catalog taxonomy, association policy and filter schema without database migrations | 8d1254f8dfb32e8cbda10bee6b510b09da7d4ecf |
 | collections-associations | P1 | collections-data-policy | Codex | DONE | APPROVED | Store and validate collection to product associations without Production migration | 442c3f35cb03777162afe1ee3f00c20ac613e22a |
-| collections-filter | P1 | collections-associations | Codex | APPROVED | APPROVED | Collection routes show only associated published products with filter and empty states | - |
+| collections-filter | P1 | collections-associations | Codex | DONE | APPROVED | Collection routes show only associated published products with filter and empty states | 9dea1114805e955c9563313de236382690b6cc34 |
 | email-delivery-policy | P1 | - | Antigravity | BACKLOG | NEEDS_DECISION | Choose provider, sender domain and scheduled dispatch infrastructure | - |
 | email-provider-adapter | P1 | email-delivery-policy | Codex | BACKLOG | NEEDS_DECISION | Production mail adapter preserves outbox retries and secret isolation | - |
 | outbox-scheduler | P1 | email-delivery-policy,email-outbox-dispatch | Codex | BACKLOG | NEEDS_DECISION | Authenticated scheduled dispatch safely claims pending outbox jobs | - |
