@@ -3,7 +3,7 @@
 Status: READY_FOR_REVIEW
 Changed paths: lib/email/templates.ts, lib/email/types.ts, lib/email/outbox.ts, tests/email-templates.test.mjs, tests/email-outbox.test.mjs
 Commit: feat(email-notification-templates): implement approved task
-Commit hash: -
+Commit hash: 4692ce6fadc881bad871abda8fa100cdc23fa94d
 
 Implemented typed HTML and plain-text customer confirmation, consultant assignment, and status update templates, with rendering integrated into the outbox worker.
 

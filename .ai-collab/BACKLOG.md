@@ -16,5 +16,5 @@ Only Antigravity adds tasks from a roadmap approved by the user. Use a unique lo
 | release-m5-controlled-merge | P1 | release-m4-github-ci | Codex | DONE | Controlled merge coordinator with signed authorization, branch protection and merge validation | 3240800dc0f40cc077a018dce674f7403a019da0 |
 | release-m6-production-tracking | P1 | release-m5-controlled-merge | Codex | DONE | Vercel Production deployment observer matching merged commit SHA with error boundary | 630795f7e0c2ee08ea9511562d26654a0f18b99f |
 | storefront-customer-portal | P2 | inquiry-service-layer | Codex | BACKLOG | Customer order inquiry lookup portal, verification by phone or email and order history view | - |
-| email-notification-templates | P1 | email-outbox-dispatch | Codex | APPROVED | Email templates for customer confirmation, consultant assignment and status changes via outbox worker | - |
+| email-notification-templates | P1 | email-outbox-dispatch | Codex | DONE | Email templates for customer confirmation, consultant assignment and status changes via outbox worker | 4692ce6fadc881bad871abda8fa100cdc23fa94d |
 
