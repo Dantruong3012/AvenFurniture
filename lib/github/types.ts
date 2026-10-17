@@ -84,3 +84,26 @@ export type PullRequestReconciliation = {
   branchMatches: boolean;
   state: "open" | "merged" | "closed";
 };
+
+export type MergeAuthorization = {
+  actor: string;
+  pullRequest: number;
+  headSha: string;
+  baseBranch: string;
+  issuedAt: number;
+  expiresAt: number;
+};
+
+export type BranchProtectionStatus = {
+  protected: boolean;
+  requiredApprovingReviews: number;
+  requiredStatusChecks: string[];
+  requireLinearHistory: boolean;
+};
+
+export type MergeValidationResult = {
+  ready: boolean;
+  reasons: string[];
+  requiredChecksMissing: string[];
+  approvalsMissing: number;
+};
