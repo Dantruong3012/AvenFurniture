@@ -294,3 +294,61 @@ test("closing a successful cart dialog focuses the heading when its original tri
   harness.effects[0]()();
   assert.deepEqual(events, ["close dialog", "focus heading"]);
 });
+
+test("customer lookup validation accepts normalized email and exact-format phone only", () => {
+  const { validateCustomerInquiryLookup } = loadModule("lib/validation/inquiry.ts");
+  assert.deepEqual(validateCustomerInquiryLookup({ type: "email", value: " Customer@Example.com " }), { type: "email", value: "customer@example.com" });
+  assert.deepEqual(validateCustomerInquiryLookup({ type: "phone", value: "+84 (90) 123-4567" }), { type: "phone", value: "+84 (90) 123-4567" });
+  for (const value of [
+    { type: "email", value: "bad@" }, { type: "email", value: "a%@example.com" },
+    { type: "phone", value: "123" }, { type: "phone", value: "90@example.com" },
+    { type: "email", value: "a@example.com\u0000" }, { type: "unknown", value: "a@example.com" }, null,
+  ]) assert.equal(validateCustomerInquiryLookup(value), null);
+});
+
+test("customer repository performs an exact contact lookup, omits deleted rows and returns bounded customer fields", async () => {
+  const calls = [];
+  const record = { reference: 42, created_at: "2025-01-01T00:00:00Z", status: "new", message: "Need a chair", inquiry_items: [] };
+  const builder = {
+    select(value) { calls.push(["select", value]); return this; },
+    is(...args) { calls.push(["is", ...args]); return this; },
+    ilike(...args) { calls.push(["ilike", ...args]); return this; },
+    eq(...args) { calls.push(["eq", ...args]); return this; },
+    order(...args) { calls.push(["order", ...args]); return this; },
+    limit(...args) { calls.push(["limit", ...args]); return this; },
+    then(resolve) { return resolve({ data: [record], error: null }); },
+  };
+  const { lookupCustomerInquiries } = loadModule("lib/repositories/supabaseInquiryRepository.ts", {
+    "server-only": {}, "@/lib/supabase/admin": { createServiceClient: () => ({ from: (table) => { calls.push(["from", table]); return builder; } }) },
+  });
+  const results = await lookupCustomerInquiries({ type: "email", value: "customer@example.com" });
+  assert.deepEqual(results, [record]);
+  assert.ok(calls.some(([method, ...args]) => method === "ilike" && args[0] === "contact_email" && args[1] === '"customer@example.com"'));
+  assert.ok(calls.some(([method, ...args]) => method === "is" && args[0] === "deleted_at" && args[1] === null));
+  assert.ok(calls.some(([method, ...args]) => method === "limit" && args[0] === 50));
+  const projection = calls.find(([method]) => method === "select")[1];
+  assert.match(projection, /inquiry_items\(id,product_name,product_slug,quantity,unit_price,currency\)/);
+  assert.doesNotMatch(projection, /contact_email|contact_phone|assignee_id|inquiry_notes/);
+});
+
+test("customer lookup action rate-limits by normalized identifier and returns only generic empty-result feedback", async () => {
+  const lookups = [], limits = [];
+  let permit = true;
+  const { lookupCustomerInquiries } = loadModule("lib/inquiries/actions.ts", {
+    "next/cache": { revalidatePath() {} },
+    "@/lib/auth/admin": { requireAdmin() { assert.fail("Public lookup must not require admin auth"); } },
+    "@/lib/auth/mutation": { allowAuthMutation: async (...args) => { limits.push(args); return permit; } },
+    "@/lib/repositories/supabaseInquiryRepository": {
+      addAdminInquiryNote() {}, updateAdminInquiryStatus() {},
+      lookupCustomerInquiries: async (identifier) => { lookups.push(identifier); return []; },
+    },
+  });
+  const result = await lookupCustomerInquiries({}, { get(name) { return ({ type: "email", value: "Customer@Example.com" })[name] ?? null; } });
+  assert.equal(result.message, "No matching inquiries found. Check the contact detail and try again.");
+  assert.deepEqual(result.inquiries, []);
+  assert.deepEqual(limits[0], ["customer-inquiry-lookup", "customer@example.com", 5]);
+  assert.deepEqual(lookups[0], { type: "email", value: "customer@example.com" });
+  permit = false;
+  const denied = await lookupCustomerInquiries({}, { get(name) { return ({ type: "phone", value: "+84 90 1234567" })[name] ?? null; } });
+  assert.match(denied.error, /too many/i);
+});

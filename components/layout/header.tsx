@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import { BagIcon, CloseIcon, HeartIcon, MenuIcon, SearchIcon } from "@/components/ui/icons";
 import { useStore } from "@/components/store/store-provider";
 
-const links = [["Collections","/collections"],["Products","/products"],["Inspiration","/inspiration"],["About","/about"],["Consultants","/consultants"],["Contact","/contact"]];
+const links = [["Collections","/collections"],["Products","/products"],["Inspiration","/inspiration"],["About","/about"],["Consultants","/consultants"],["Contact","/contact"],["My inquiries","/portal"]];
 
 export function Header() {
   const pathname = usePathname();

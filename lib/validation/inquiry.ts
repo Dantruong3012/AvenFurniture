@@ -6,6 +6,25 @@ export const inquiryStatuses = ["new", "consulting", "completed", "cancelled"] a
 export type InquirySource = typeof inquirySources[number];
 export type InquiryStatus = typeof inquiryStatuses[number];
 
+export type CustomerInquiryLookup = { type: "email"; value: string } | { type: "phone"; value: string };
+
+/** Normalize a single exact-match contact identifier for the public lookup. */
+export function validateCustomerInquiryLookup(value: unknown): CustomerInquiryLookup | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const input = value as Record<string, unknown>;
+  if (input.type !== "email" && input.type !== "phone") return null;
+  if (typeof input.value !== "string" || input.value.length > 254 || input.value.includes("\0")) return null;
+  const normalized = input.value.trim();
+  if (input.type === "email") {
+    const email = normalized.toLowerCase();
+    // Excluding wildcard and filter punctuation keeps the repository match exact.
+    if (email.length < 6 || !/^[a-z0-9.!#$&'*+/=?^_`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+$/.test(email)) return null;
+    return { type: "email", value: email };
+  }
+  if (normalized.length < 6 || normalized.length > 30 || !/^\+?[0-9 ().-]+$/.test(normalized) || !/[0-9]/.test(normalized)) return null;
+  return { type: "phone", value: normalized };
+}
+
 export function validateInquiryNote(body: unknown): string {
   if (typeof body !== "string" || !body.trim() || body.trim().length > 10000 || body.includes("\0")) {
     throw new Error("Enter a note of 1–10000 characters.");
