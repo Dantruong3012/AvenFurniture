@@ -1,8 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { isAuthRetryableFetchError, isAuthSessionMissingError } from "@supabase/supabase-js";
-import type { AdminRole, Database } from "@/lib/supabase/database.types";
+import type { Database } from "@/lib/supabase/database.types";
+import { staffRole, type StaffRole } from "./validation";
 
-export type AdminSessionContext = { role: AdminRole; expires_at: string };
+export type AdminSessionContext = { role: StaffRole; expires_at: string };
 export class AuthUnavailableError extends Error {
   constructor() { super("Authentication is temporarily unavailable. Please try again."); this.name = "AuthUnavailableError"; }
 }
@@ -21,10 +22,10 @@ export function sessionErrorKind(error: unknown): "invalid" | "unavailable" {
 export function parseAdminSessionContext(data: unknown): AdminSessionContext | null {
   if (data === null) return null;
   if (typeof data !== "object" || !("role" in data) || !("expires_at" in data) ||
-      (data.role !== "staff" && data.role !== "super_admin") || typeof data.expires_at !== "string" || !Number.isFinite(Date.parse(data.expires_at))) {
+      !staffRole(data.role) || typeof data.expires_at !== "string" || !Number.isFinite(Date.parse(data.expires_at))) {
     throw new AuthUnavailableError();
   }
-  return { role: data.role, expires_at: data.expires_at };
+  return { role: data.role as StaffRole, expires_at: data.expires_at };
 }
 
 export async function readAdminSessionContext(supabase: SupabaseClient<Database>) {

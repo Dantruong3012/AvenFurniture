@@ -7,8 +7,10 @@ import { readMfaState, sensitiveAuthAllowed } from "./mfa-policy";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { requireAdmin } from "./admin";
+import { requireStaffManager } from "./admin";
+import { revalidatePath } from "next/cache";
 import { readAdminSessionContext } from "./session";
-import { recoveryType, validEmail, validNewPassword } from "./validation";
+import { assignableStaffRole, recoveryType, staffRole, validEmail, validNewPassword, validStaffId, validStaffName } from "./validation";
 
 export type AuthState = { error?: string; message?: string };
 const field = (form: FormData, name: string) => String(form.get(name) ?? "");
@@ -119,4 +121,101 @@ export async function changePassword(_state: AuthState, form: FormData): Promise
   const { error: signOutError } = await supabase.auth.signOut({ scope: "global" });
   if (signOutError) return { error: "Password updated, but session sign-out failed. Please sign out and contact your administrator." };
   redirect("/admin/login?password=updated");
+}
+
+const teamError = { error: "Account change could not be completed. Check the account and try again." };
+
+export async function inviteStaff(form: FormData): Promise<AuthState> {
+  const { user, session } = await requireStaffManager();
+  const email = field(form, "email").trim().toLowerCase();
+  const name = field(form, "display_name").trim();
+  const role = assignableStaffRole(field(form, "role"), session.role);
+  if (!validEmail(email) || !validStaffName(name) || !role || role === "super_admin") return { error: "Enter a name, valid email, and admin or editor role." };
+  if (!(await allowAuthMutation("staff-invite", user.id, 10))) return { error: "Too many invitations. Try again later." };
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL;
+  if (!siteUrl) return { error: "Invitations are not configured yet." };
+  const { createServiceClient } = await import("@/lib/supabase/admin");
+  const service = createServiceClient();
+  const { data, error } = await service.auth.admin.inviteUserByEmail(email, {
+    data: { display_name: name }, redirectTo: new URL("/auth/confirm", siteUrl).toString(),
+  });
+  if (error || !data.user) return teamError;
+  const created = await service.from("admin_profiles").insert({ user_id: data.user.id, display_name: name, role, active: true });
+  if (created.error) return { error: "Invite was sent, but access could not be provisioned. Contact an administrator before retrying." };
+  revalidatePath("/admin/team");
+  return { message: "Invitation sent." };
+}
+
+async function managedTarget(id: string, managerRole: string) {
+  const { createServiceClient } = await import("@/lib/supabase/admin");
+  const service = createServiceClient();
+  const result = await service.from("admin_profiles").select("user_id,role,active").eq("user_id", id).maybeSingle();
+  if (result.error || !result.data || !staffRole(result.data.role) ||
+      (managerRole !== "super_admin" && result.data.role === "super_admin")) return null;
+  return { service, target: result.data };
+}
+
+export async function changeStaffRole(form: FormData): Promise<AuthState> {
+  const { user, session } = await requireStaffManager();
+  const id = field(form, "user_id");
+  const role = assignableStaffRole(field(form, "role"), session.role);
+  if (!validStaffId(id) || !role) return { error: "Choose a valid account and role." };
+  if (!(await allowAuthMutation("staff-role", user.id, 20))) return teamError;
+  const managed = await managedTarget(id, session.role);
+  if (!managed) return teamError;
+  if (managed.target.role === role) return { message: "Role is already current." };
+  const { data, error } = await managed.service.from("admin_profiles").update({ role })
+    .eq("user_id", id).eq("role", managed.target.role).select("user_id").maybeSingle();
+  if (error || !data) return { error: "Role change was rejected. The last active super admin must remain." };
+  revalidatePath("/admin/team");
+  return { message: "Role updated. Existing sessions now use the new role." };
+}
+
+export async function setStaffActive(form: FormData): Promise<AuthState> {
+  const { user, session } = await requireStaffManager();
+  const id = field(form, "user_id");
+  const active = field(form, "active");
+  if (!validStaffId(id) || (active !== "true" && active !== "false")) return teamError;
+  if (!(await allowAuthMutation("staff-active", user.id, 20))) return teamError;
+  const managed = await managedTarget(id, session.role);
+  if (!managed) return teamError;
+  const enable = active === "true";
+  if (enable) {
+    const currentAuth = await managed.service.auth.admin.getUserById(id);
+    if (currentAuth.error || !currentAuth.data.user || currentAuth.data.user.deleted_at) return { error: "A deleted Auth account cannot be enabled. Send a new invitation instead." };
+  }
+  if (managed.target.active !== enable) {
+    const { data, error } = await managed.service.from("admin_profiles").update({ active: enable })
+      .eq("user_id", id).eq("role", managed.target.role).eq("active", !enable).select("user_id").maybeSingle();
+    if (error || !data) return { error: "Account change was rejected. The last active super admin must remain." };
+  }
+  if (!enable) {
+    const ban = await managed.service.auth.admin.updateUserById(id, { ban_duration: "876000h" });
+    if (ban.error) return { error: "Access and sessions were revoked, but the Auth ban failed. Retry or contact an administrator." };
+  } else {
+    const unban = await managed.service.auth.admin.updateUserById(id, { ban_duration: "none" });
+    if (unban.error) return { error: "Profile was enabled, but the Auth ban remains. Retry or contact an administrator." };
+  }
+  revalidatePath("/admin/team");
+  return { message: enable ? "Account enabled. A fresh sign in is required." : "Account disabled and sessions revoked." };
+}
+
+export async function deleteStaff(form: FormData): Promise<AuthState> {
+  const { user, session } = await requireStaffManager();
+  const id = field(form, "user_id");
+  if (!validStaffId(id) || field(form, "confirm") !== "DELETE") return { error: "Confirm deletion to continue." };
+  if (!(await allowAuthMutation("staff-delete", user.id, 10))) return teamError;
+  const managed = await managedTarget(id, session.role);
+  if (!managed) return teamError;
+  // Keep the profile for audit/FK history. Auth soft deletion removes sign-in
+  // credentials while the disabled profile permanently denies Admin access.
+  if (managed.target.active) {
+    const locked = await managed.service.from("admin_profiles").update({ active: false })
+      .eq("user_id", id).eq("role", managed.target.role).eq("active", true).select("user_id").maybeSingle();
+    if (locked.error || !locked.data) return { error: "Deletion was rejected. The last active super admin must remain." };
+  }
+  const deleted = await managed.service.auth.admin.deleteUser(id, true);
+  if (deleted.error) return { error: "Access and sessions were revoked, but Auth deletion failed. Retry or contact an administrator." };
+  revalidatePath("/admin/team");
+  return { message: "Auth account deleted; its disabled audit profile was retained." };
 }

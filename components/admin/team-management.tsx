@@ -1,46 +1,63 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { changeStaffRole, deleteStaff, inviteStaff, setStaffActive, type AuthState } from "@/lib/auth/actions";
 
-export type TeamMember = {
-  user_id: string;
-  display_name: string;
-  role: string;
-  active: boolean;
-  created_at: string;
-};
+export type TeamMember = { user_id: string; display_name: string; role: string; active: boolean; created_at: string };
+const roleLabel = (role: string) => ({ super_admin: "Super admin", admin: "Admin", editor: "Editor", staff: "Staff (legacy)" })[role as "super_admin" | "admin" | "editor" | "staff"] ?? role;
 
-export function TeamManagement({ members }: { members: TeamMember[] }) {
+export function TeamManagement({ members, managerId, managerRole }: { members: TeamMember[]; managerId: string; managerRole: "super_admin" | "admin" }) {
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
   const [selected, setSelected] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<AuthState>({});
   const editorRef = useRef<HTMLElement>(null);
   const showDetails = (id: string) => {
-    setSelected(id);
+    setSelected(id); setFeedback({});
     if (window.matchMedia("(max-width: 850px)").matches) requestAnimationFrame(() => editorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
   };
+  const submit = (action: (form: FormData) => Promise<AuthState>, form: FormData) => {
+    setFeedback({});
+    startTransition(async () => {
+      try {
+        const result = await action(form);
+        setFeedback(result);
+        if (result.message) router.refresh();
+      } catch { setFeedback({ error: "The request could not be completed. Try again." }); }
+    });
+  };
   const active = members.filter((member) => member.active).length;
-  const visible = useMemo(() => members.filter((member) => {
-    const matchesStatus = filter === "all" || (filter === "active" ? member.active : !member.active);
-    return matchesStatus && member.display_name.toLowerCase().includes(search.trim().toLowerCase());
-  }), [members, search, filter]);
+  const visible = useMemo(() => members.filter((member) =>
+    (filter === "all" || (filter === "active" ? member.active : !member.active)) &&
+    member.display_name.toLowerCase().includes(search.trim().toLowerCase())
+  ), [members, search, filter]);
   const editing = members.find((member) => member.user_id === selected);
   const creating = selected === "new";
+  const soleSuper = editing?.role === "super_admin" && editing.active && members.filter((member) => member.role === "super_admin" && member.active).length === 1;
+  const canManage = editing && (managerRole === "super_admin" || editing.role !== "super_admin");
 
   return <div className="admin-content team-page">
-    <header className="admin-header"><div><p className="section-note">Workspace settings</p><h1>Team & access</h1><p>Review team accounts and plan who can manage your catalog. Account changes are not available yet.</p></div><button className="btn btn-primary" type="button" onClick={() => showDetails("new")} aria-controls="team-account-details">Add team member</button></header>
+    <header className="admin-header"><div><p className="section-note">Workspace settings</p><h1>Team & access</h1><p>Invite staff and manage roles and account access.</p></div><button className="btn btn-primary" type="button" onClick={() => showDetails("new")}>Invite team member</button></header>
     <div className="team-summary" aria-label="Team summary"><div><strong>{members.length}</strong><span>Total accounts</span></div><div><strong>{active}</strong><span>Active accounts</span></div><div><strong>{members.length - active}</strong><span>Disabled accounts</span></div></div>
     <div className="team-layout"><section className="admin-panel team-list"><div className="admin-panel-heading"><div><p className="section-note">People</p><h2>Team members</h2></div></div>
       <div className="team-toolbar"><label><span className="sr-only">Search team members</span><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search by name" /></label><label><span className="sr-only">Filter account status</span><select value={filter} onChange={(event) => setFilter(event.target.value)}><option value="all">All accounts</option><option value="active">Active</option><option value="disabled">Disabled</option></select></label></div>
-      <div className="team-rows">{visible.map((member) => <button type="button" key={member.user_id} className={`team-row${selected === member.user_id ? " selected" : ""}`} onClick={() => showDetails(member.user_id)} aria-pressed={selected === member.user_id} aria-controls="team-account-details">
-        <span className="team-row-person"><span className="team-avatar" aria-hidden="true">{member.display_name.trim().charAt(0).toUpperCase() || "A"}</span><span><strong>{member.display_name}</strong><small>Added {new Date(member.created_at).toLocaleDateString("en-US")}</small></span></span><span className="team-row-meta"><span>{member.role === "super_admin" ? "Super admin" : "Staff"}</span><span className={`team-state${member.active ? " active" : ""}`}>{member.active ? "Active" : "Disabled"}</span></span>
+      <div className="team-rows">{visible.map((member) => <button type="button" key={member.user_id} className={`team-row${selected === member.user_id ? " selected" : ""}`} onClick={() => showDetails(member.user_id)} aria-pressed={selected === member.user_id}>
+        <span className="team-row-person"><span className="team-avatar" aria-hidden="true">{member.display_name.trim().charAt(0).toUpperCase() || "A"}</span><span><strong>{member.display_name}</strong><small>Added {new Date(member.created_at).toLocaleDateString("en-US")}</small></span></span><span className="team-row-meta"><span>{roleLabel(member.role)}</span><span className={`team-state${member.active ? " active" : ""}`}>{member.active ? "Active" : "Disabled"}</span></span>
       </button>)}</div>
-      {!visible.length && <div className="admin-empty"><h3>{members.length ? "No matching accounts" : "No team accounts found"}</h3><p>{members.length ? "Try another name or status filter." : "Team accounts will appear here when available."}</p></div>}
+      {!visible.length && <div className="admin-empty"><h3>{members.length ? "No matching accounts" : "No team accounts found"}</h3></div>}
     </section><aside ref={editorRef} id="team-account-details" className="admin-panel team-editor" aria-label="Account details">
-      <div className="team-editor-top"><p className="section-note">{creating ? "New account" : editing ? "Account details" : "Manage access"}</p>{selected && <button type="button" onClick={() => setSelected(null)} aria-label="Close account details">Close ×</button>}</div>
-      {!selected && <div className="team-editor-placeholder"><h2>Select a team member</h2><p>Choose an account to preview its role and access controls, or start a new staff account.</p></div>}
-      {creating && <div className="team-editor-fields"><h2>Add team member</h2><p className="team-preview-note">Interface preview only. No account will be created and no email will be sent.</p><label>Full name<input type="text" placeholder="Employee name" maxLength={120} autoComplete="off" /></label><label>Email address<input type="email" placeholder="name@example.com" autoComplete="off" /></label><label>Initial role<select defaultValue="staff"><option value="staff">Staff — manage products and media</option><option value="super_admin">Super admin — manage team and categories</option></select></label><p className="team-field-help">Staff cannot create categories or change team permissions.</p><button className="btn btn-primary" type="button" disabled>Create account — coming later</button></div>}
-      {editing && <div className="team-editor-fields" key={editing.user_id}><h2>{editing.display_name}</h2><p className="team-preview-note">Interface preview only. Changes to this account cannot be saved yet.</p><label>Display name<input type="text" defaultValue={editing.display_name} maxLength={120} /></label><label>Role<select defaultValue={editing.role}><option value="staff">Staff — products and media</option><option value="super_admin">Super admin — full management</option></select></label><div className="team-account-state"><span><strong>Account status</strong><small>{editing.active ? "Active accounts can sign in and use their assigned role." : "Disabled accounts cannot access Admin."}</small></span><span className={`team-state${editing.active ? " active" : ""}`}>{editing.active ? "Active" : "Disabled"}</span></div><button className="btn btn-primary" type="button" disabled>Save changes — coming later</button><div className="team-danger"><h3>Account actions</h3><p>Disabling or deleting an account will require confirmation when account management is enabled. The last active super admin must be protected.</p><div><button type="button" disabled>{editing.active ? "Disable account" : "Enable account"}</button><button type="button" disabled>Delete account</button></div></div></div>}
+      <div className="team-editor-top"><p className="section-note">{creating ? "New invitation" : editing ? "Account details" : "Manage access"}</p>{selected && <button type="button" onClick={() => { setSelected(null); setFeedback({}); }} aria-label="Close account details">Close ×</button>}</div>
+      {!selected && <div className="team-editor-placeholder"><h2>Select a team member</h2><p>Choose an account to manage its role and access, or invite someone new.</p></div>}
+      {creating && <form className="team-editor-fields" onSubmit={(event) => { event.preventDefault(); submit(inviteStaff, new FormData(event.currentTarget)); }}><h2>Invite team member</h2><label>Full name<input name="display_name" type="text" maxLength={120} required autoComplete="name" /></label><label>Email address<input name="email" type="email" maxLength={254} required autoComplete="email" /></label><label>Initial role<select name="role" defaultValue="editor"><option value="editor">Editor</option><option value="admin">Admin</option></select></label><p className="team-field-help">An invitation email lets the person set a password.</p><button className="btn btn-primary" type="submit" disabled={pending}>Send invitation</button></form>}
+      {editing && <div className="team-editor-fields" key={editing.user_id}><h2>{editing.display_name}</h2><p className="team-preview-note">{editing.user_id === managerId ? "This is your account." : "Changes to access take effect immediately."}</p>
+        <form onSubmit={(event) => { event.preventDefault(); submit(changeStaffRole, new FormData(event.currentTarget)); }}><input type="hidden" name="user_id" value={editing.user_id} /><label>Role<select name="role" defaultValue={editing.role} disabled={!canManage || soleSuper || pending}><option value="editor">Editor</option><option value="admin">Admin</option>{managerRole === "super_admin" && <option value="super_admin">Super admin</option>}{editing.role === "staff" && <option value="staff" disabled>Staff (legacy)</option>}</select></label><button className="btn btn-primary" type="submit" disabled={!canManage || soleSuper || pending}>Save role</button></form>
+        <div className="team-account-state"><span><strong>Account status</strong><small>{editing.active ? "Active accounts can sign in." : "Disabled accounts cannot access Admin."}</small></span><span className={`team-state${editing.active ? " active" : ""}`}>{editing.active ? "Active" : "Disabled"}</span></div>
+        <div className="team-danger"><h3>Account actions</h3>{soleSuper && <p>The last active super admin cannot be disabled, deleted, or demoted.</p>}<div><button type="button" disabled={!canManage || soleSuper || pending} onClick={() => { const form = new FormData(); form.set("user_id", editing.user_id); form.set("active", String(!editing.active)); submit(setStaffActive, form); }}>{editing.active ? "Disable account" : "Enable account"}</button><button type="button" disabled={!canManage || soleSuper || pending} onClick={() => { if (!window.confirm(`Delete the Auth account for ${editing.display_name}? This cannot be undone.`)) return; const form = new FormData(); form.set("user_id", editing.user_id); form.set("confirm", "DELETE"); submit(deleteStaff, form); }}>Delete account</button></div></div>
+      </div>}
+      {(feedback.error || feedback.message) && <p role={feedback.error ? "alert" : "status"} className="team-field-help">{feedback.error ?? feedback.message}</p>}
     </aside></div>
   </div>;
 }

@@ -1,8 +1,10 @@
 import { requireAdmin } from "@/lib/auth/admin";
 import { TeamManagement, type TeamMember } from "@/components/admin/team-management";
+import { redirect } from "next/navigation";
 
 export default async function TeamPage() {
-  const { supabase } = await requireAdmin("super_admin");
+  const { supabase, user, session } = await requireAdmin();
+  if (session.role !== "super_admin" && session.role !== "admin") redirect("/admin/access-denied");
   const members: TeamMember[] = [];
   for (let start = 0; ; start += 1000) {
     const { data, error } = await supabase.from("admin_profiles")
@@ -13,5 +15,5 @@ export default async function TeamPage() {
     members.push(...data);
     if (data.length < 1000) break;
   }
-  return <TeamManagement members={members} />;
+  return <TeamManagement members={members} managerId={user.id} managerRole={session.role} />;
 }
