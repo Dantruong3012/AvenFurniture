@@ -3,7 +3,7 @@
 Active task: -
 Current phase: IDLE
 Last completed task: collections-filter
-Next task: -
+Next task: email-event-schema-policy
 Blockers: -
 Last successful commit: 9dea1114805e955c9563313de236382690b6cc34
 
