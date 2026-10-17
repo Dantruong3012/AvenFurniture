@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { loadModule } from "./helpers/load-module.mjs";
 const { validateCatalog, suggestSlug, catalogError } = loadModule("lib/validation/catalog.ts");
+const { collectionDefinitionSchema, collectionTaxonomySchema, collectionFilterSchema } = loadModule("lib/validation/catalog.ts");
+const { collectionCatalog, resolveCollectionCatalog, collectionForProduct, collectionProductHref } = loadModule("lib/catalog/public.ts");
 const id = "00000000-0000-0000-0000-000000000001";
 const form = (overrides = {}) => {
   const values = { id: "", name: "Bàn gỗ đẹp", slug: "", description: "Oak table", category_id: id, price: "", currency: "USD", status: "draft", attributes: "{}", sort_order: "0", ...overrides };
@@ -24,6 +26,48 @@ test("catalog filters clamp pagination, reject untrusted enums and preserve lite
   const { catalogFilters } = loadModule("lib/catalog/queries.ts", { "server-only": {}, "@/lib/auth/admin": {} });
   const filters = catalogFilters({ page: "-99", status: "private", category: "injection", sort: "name.desc", q: "_%", edit: ["new"] }, "products");
   assert.equal(filters.page, 1); assert.equal(filters.status, ""); assert.equal(filters.category, ""); assert.equal(filters.sort, "newest"); assert.equal(filters.q, "_%"); assert.equal(filters.edit, "");
+});
+test("collection taxonomy validates copy, metadata, unique slugs and exact category associations", () => {
+  assert.equal(collectionTaxonomySchema.safeParse(collectionCatalog).success, true);
+  assert.deepEqual(collectionCatalog.map(({ slug }) => slug), ["living", "dining", "bedroom"]);
+  const valid = collectionCatalog[0];
+  for (const change of [
+    { slug: "Bad/Slug" },
+    { title: " " },
+    { metadata: { ...valid.metadata, seoTitle: "x".repeat(71) } },
+    { association: { kind: "category", categorySlug: "dining" } },
+    { association: { kind: "tag", categorySlug: "living" } },
+    { unexpected: true },
+  ]) assert.equal(collectionDefinitionSchema.safeParse({ ...valid, ...change }).success, false);
+  assert.equal(collectionTaxonomySchema.safeParse([valid, { ...valid }]).success, false);
+});
+test("collection associations use exact category slugs and produce usable product filters", () => {
+  assert.equal(collectionForProduct({ category: { slug: "living" } })?.slug, "living");
+  assert.equal(collectionForProduct({ category: { slug: "living-room" } }), null);
+  assert.equal(collectionForProduct({ category: { slug: "Living" } }), null);
+  assert.equal(collectionForProduct({ category: { slug: "dining" } })?.slug, "dining");
+  assert.deepEqual(resolveCollectionCatalog("bedroom").map(({ slug }) => slug), ["bedroom"]);
+  assert.deepEqual(resolveCollectionCatalog("unknown"), []);
+  for (const collection of collectionCatalog) {
+    const url = new URL(collectionProductHref(collection), "https://example.test");
+    assert.equal(url.pathname, "/products");
+    assert.equal(url.searchParams.get("category"), collection.association.categorySlug);
+  }
+});
+test("collection filter schema defaults malformed or repeated values and bounds search", () => {
+  const { parseCollectionFilters, collectionProductFilters } = loadModule("lib/catalog/queries.ts", { "server-only": {}, "@/lib/auth/admin": {} });
+  const filters = parseCollectionFilters({ collection: "living", q: `  ${"a".repeat(120)}  `, material: " oak ", price: "quote", sort: "newest", page: "10001" });
+  assert.equal(filters.q.length, 100);
+  assert.equal(filters.material, "oak");
+  assert.equal(filters.page, 10000);
+  assert.deepEqual(collectionProductFilters(filters), { q: filters.q, category: "living", material: "oak", price: "quote", sort: "newest", page: 10000 });
+  const invalid = parseCollectionFilters({ collection: ["living", "dining"], q: ["oak"], material: ["wood"], price: "free", sort: "random", page: "2evil" });
+  assert.deepEqual(invalid, { collection: "", q: "", material: "", price: "all", sort: "featured", page: 1 });
+  assert.equal(collectionProductFilters(invalid), null);
+  assert.equal(collectionProductFilters(parseCollectionFilters({ collection: "unknown" })), null);
+  assert.equal(collectionProductFilters(parseCollectionFilters({ collection: "living%2Cdining" })), null);
+  assert.equal(parseCollectionFilters({ collection: "living", page: "0002" }).page, 1);
+  assert.equal(collectionFilterSchema.safeParse({ collection: "living", q: "", material: "", price: "all", sort: "featured", page: "1" }).success, true);
 });
 function actions({ role = "staff", allow = true, rpcError = null } = {}) {
   const calls = [], invalidated = [];

@@ -1,3 +1,47 @@
+import { z } from "zod";
+import type { CollectionDefinition, CollectionFilterQuery } from "@/lib/types";
+
+const slugSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(160);
+const requiredCopy = (max: number) => z.string().trim().min(1).max(max).refine((value) => !value.includes("\0"));
+
+export const collectionDefinitionSchema: z.ZodType<CollectionDefinition> = z.strictObject({
+  name: requiredCopy(120),
+  slug: slugSchema,
+  title: requiredCopy(160),
+  description: requiredCopy(500),
+  image: z.string().url().refine((value) => value.startsWith("https://")),
+  metadata: z.strictObject({
+    imageAlt: requiredCopy(200),
+    seoTitle: requiredCopy(70),
+    seoDescription: requiredCopy(160),
+  }),
+  association: z.strictObject({ kind: z.literal("category"), categorySlug: slugSchema }),
+}).refine((collection) => collection.slug === collection.association.categorySlug, {
+  message: "Collection and category slugs must match.", path: ["association", "categorySlug"],
+});
+
+export const collectionTaxonomySchema = z.array(collectionDefinitionSchema).min(1).superRefine((collections, context) => {
+  const slugs = new Set<string>();
+  for (const [index, collection] of collections.entries()) {
+    if (slugs.has(collection.slug)) context.addIssue({ code: "custom", message: "Duplicate collection slug.", path: [index, "slug"] });
+    slugs.add(collection.slug);
+  }
+});
+
+const singleText = (max: number) => z.string().trim().transform((value) => value.slice(0, max)).catch("");
+const priceSchema = z.enum(["all", "quote", "priced", "under-1000", "1000-3000", "over-3000"]);
+const sortSchema = z.enum(["featured", "newest", "name", "price-low", "price-high"]);
+
+/** Repeated URL parameters and malformed values are rejected by the individual defaults. */
+export const collectionFilterSchema: z.ZodType<CollectionFilterQuery> = z.object({
+  collection: slugSchema.catch(""),
+  q: singleText(100),
+  material: singleText(80),
+  price: priceSchema.catch("all"),
+  sort: sortSchema.catch("featured"),
+  page: z.string().regex(/^[1-9]\d*$/).transform((value) => Math.min(10000, Number(value))).catch(1),
+});
+
 export type CatalogKind = "categories" | "products";
 export type CatalogState = { error?: string; fields?: Record<string, string>; values?: Record<string, string> };
 export const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

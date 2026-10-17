@@ -47,6 +47,27 @@ export interface Collection {
   image: string;
 }
 
+/** Collections are editorial views over existing product categories, not database rows. */
+export interface CollectionDefinition extends Collection {
+  title: string;
+  metadata: {
+    imageAlt: string;
+    seoTitle: string;
+    seoDescription: string;
+  };
+  /** A product belongs only when its public category slug equals this value. */
+  association: { kind: "category"; categorySlug: string };
+}
+
+export type CollectionFilterQuery = {
+  collection: string;
+  q: string;
+  material: string;
+  price: "all" | "quote" | "priced" | "under-1000" | "1000-3000" | "over-3000";
+  sort: "featured" | "newest" | "name" | "price-low" | "price-high";
+  page: number;
+};
+
 /** Frontmatter of a locally committed .md journal article. Dates are ISO calendar dates (YYYY-MM-DD). */
 export interface JournalFrontmatter {
   slug: string;

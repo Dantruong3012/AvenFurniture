@@ -1,4 +1,24 @@
 import type { Database } from "@/lib/supabase/database.types";
+import type { CollectionDefinition } from "@/lib/types";
+
+/** Category slugs are the only association key; no inferred name or attribute matches. */
+export const collectionCatalog = [
+  { name: "Living", slug: "living", title: "Living", description: "Quiet forms for the room where life gathers.", image: "https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&w=1600&q=85", metadata: { imageAlt: "Living room interior", seoTitle: "Living furniture collection", seoDescription: "Explore furniture for considered living spaces." }, association: { kind: "category", categorySlug: "living" } },
+  { name: "Dining", slug: "dining", title: "Dining", description: "Tables and seating shaped around daily rituals.", image: "https://images.unsplash.com/photo-1600566753051-f0b89df2dd90?auto=format&fit=crop&w=1200&q=85", metadata: { imageAlt: "Dining room interior", seoTitle: "Dining furniture collection", seoDescription: "Explore tables and seating for shared meals." }, association: { kind: "category", categorySlug: "dining" } },
+  { name: "Bedroom", slug: "bedroom", title: "Bedroom", description: "Calm, tactile pieces for restorative spaces.", image: "https://images.unsplash.com/photo-1600566753086-00f18fb6b3ea?auto=format&fit=crop&w=1600&q=85", metadata: { imageAlt: "Bedroom interior", seoTitle: "Bedroom furniture collection", seoDescription: "Explore furniture for restful bedrooms." }, association: { kind: "category", categorySlug: "bedroom" } },
+] as const satisfies readonly CollectionDefinition[];
+
+export function resolveCollectionCatalog(slug?: string): CollectionDefinition[] {
+  return collectionCatalog.filter((collection) => !slug || collection.slug === slug);
+}
+
+export function collectionProductHref(collection: CollectionDefinition): string {
+  return `/products?category=${encodeURIComponent(collection.association.categorySlug)}`;
+}
+
+export function collectionForProduct(product: Pick<CatalogProduct, "category">): CollectionDefinition | null {
+  return collectionCatalog.find((collection) => collection.association.categorySlug === product.category.slug) ?? null;
+}
 
 export type CatalogProduct = {
   id: string; name: string; slug: string; description: string;

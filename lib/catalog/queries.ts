@@ -1,7 +1,27 @@
 import "server-only";
 import { requireAdmin } from "@/lib/auth/admin";
 import { uuidPattern, type CatalogKind } from "@/lib/validation/catalog";
+import { collectionFilterSchema } from "@/lib/validation/catalog";
+import { resolveCollectionCatalog } from "@/lib/catalog/public";
+import type { CatalogFilters } from "@/lib/catalog/public";
+import type { CollectionFilterQuery } from "@/lib/types";
 export type SearchParams = Record<string, string | string[] | undefined>;
+export function parseCollectionFilters(params: SearchParams): CollectionFilterQuery {
+  const one = (key: string) => typeof params[key] === "string" ? params[key] : undefined;
+  return collectionFilterSchema.parse({
+    collection: one("collection"), q: one("q"), material: one("material"),
+    price: one("price"), sort: one("sort"), page: one("page"),
+  });
+}
+
+/** Resolve the collection to the existing public category filter; unknown slugs match nothing. */
+export function collectionProductFilters(filters: CollectionFilterQuery): CatalogFilters | null {
+  const collection = resolveCollectionCatalog(filters.collection)[0];
+  if (!filters.collection || !collection) return null;
+  return { q: filters.q, category: collection.association.categorySlug, material: filters.material,
+    price: filters.price, sort: filters.sort, page: filters.page };
+}
+
 export function catalogFilters(params: SearchParams, kind: CatalogKind) {
   const one = (key: string) => typeof params[key] === "string" ? params[key] as string : "";
   const page = Math.min(10000, Math.max(1, Number.parseInt(one("page")) || 1));
