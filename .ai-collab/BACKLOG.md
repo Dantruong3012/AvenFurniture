@@ -29,7 +29,7 @@ Only Antigravity adds tasks from a roadmap approved by the user. Each task also 
 | staff-delete | P2 | staff-auth-policy | Codex | BACKLOG | NEEDS_DECISION | Approved removal policy preserves inquiry and audit history | - |
 | newsletter-data-policy | P1 | - | Antigravity | DONE | APPROVED | Approve newsletter subscriber schema, opt-in consent, retention, tokenized unsubscribe, and RLS policy | a85851084dee568971ea324c80915c62c57c5fc5 |
 | newsletter-subscribe | P1 | newsletter-data-policy | Codex | DONE | APPROVED | Storefront newsletter subscription with email validation, rate limiting, duplicate prevention and opt-in audit | cc1f907af73aff202ddf0dbb51ec3b72b8cce4e7 |
-| newsletter-unsubscribe | P1 | newsletter-subscribe | Codex | BACKLOG | APPROVED | Signed token unsubscribe route revoking subscriber consent safely without leaking list data | - |
+| newsletter-unsubscribe | P1 | newsletter-subscribe | Codex | APPROVED | APPROVED | Signed token unsubscribe route revoking subscriber consent safely without leaking list data | - |
 | journal-content-policy | P1 | - | Antigravity | DONE | APPROVED | Approve article copy, publication source, editorial ownership, static Markdown schema, SEO and Zalo CTA | afc537e3ca750bdee2f9719f058533a00822389c |
 | journal-articles | P1 | journal-content-policy | Codex | DONE | APPROVED | Working listing, article detail pages, static Markdown rendering, SEO metadata and Zalo CTA | 8623f7e3f626d1df587ac99ce87180f30797b2c5 |
 | collections-data-policy | P1 | - | Antigravity | DONE | APPROVED | Approve collection catalog taxonomy, association policy and filter schema without database migrations | 8d1254f8dfb32e8cbda10bee6b510b09da7d4ecf |

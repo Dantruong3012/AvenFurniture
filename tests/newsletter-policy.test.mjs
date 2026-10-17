@@ -36,6 +36,26 @@ test("unsubscribe tokens are random, strictly validated and hashed before storag
   assert.throws(() => policy.hashUnsubscribeToken("bad"));
 });
 
+test("signed unsubscribe links reject tampering, malformed values and expiration", () => {
+  const secret = "test-only-signing-secret";
+  const now = Date.UTC(2026, 9, 17);
+  const raw = policy.generateUnsubscribeToken();
+  const signed = policy.signUnsubscribeToken(raw, secret, now);
+  assert.doesNotMatch(signed, new RegExp(raw));
+  const tamperedParts = signed.split(".");
+  tamperedParts[3] = (tamperedParts[3].startsWith("a") ? "b" : "a") + tamperedParts[3].slice(1);
+  assert.deepEqual(policy.verifySignedUnsubscribeToken(signed, secret, now), { valid: true, token: raw });
+  assert.deepEqual(policy.verifySignedUnsubscribeToken(signed, secret, now + policy.unsubscribeLinkLifetimeSeconds * 1000 - 1000), { valid: true, token: raw });
+  for (const bad of [
+    null, "", "v1.bad", signed + "x", tamperedParts.join("."),
+    signed.slice(0, -1) + (signed.endsWith("a") ? "b" : "a"),
+  ]) assert.deepEqual(policy.verifySignedUnsubscribeToken(bad, secret, now), { valid: false });
+  assert.deepEqual(policy.verifySignedUnsubscribeToken(signed, "different-key", now), { valid: false });
+  assert.deepEqual(policy.verifySignedUnsubscribeToken(signed, secret, now + policy.unsubscribeLinkLifetimeSeconds * 1000), { valid: false });
+  assert.throws(() => policy.signUnsubscribeToken(raw, ""));
+  assert.throws(() => policy.verifySignedUnsubscribeToken(signed, ""));
+});
+
 test("consent metadata never retains raw IP or user agent and does not correlate across records", () => {
   const first = policy.consentMetadataHashes("192.0.2.1, 10.0.0.1", "Example Browser");
   const second = policy.consentMetadataHashes("192.0.2.1", "Example Browser");
@@ -49,6 +69,9 @@ test("consent metadata never retains raw IP or user agent and does not correlate
 });
 
 test("public actions enforce consent and token shape, hide roster state and sanitize RPC errors", async () => {
+  const oldSecret = process.env.SUPABASE_SECRET_KEY;
+  process.env.SUPABASE_SECRET_KEY = "test-only-signing-secret";
+  try {
   const calls = [];
   const rateCalls = [];
   let deniedOperation = null;
@@ -97,12 +120,52 @@ test("public actions enforce consent and token shape, hide roster state and sani
   assert.doesNotMatch((await actions.subscribeNewsletter({}, subscribeForm)).error, /private database detail/);
   const unsubscribeForm = new FormData();
   unsubscribeForm.set("token", "bad");
-  assert.match((await actions.unsubscribeNewsletter({}, unsubscribeForm)).error, /invalid/);
+  const genericResult = await actions.unsubscribeNewsletter({}, unsubscribeForm);
+  assert.ok(genericResult.success);
+  assert.equal(calls.length, 3);
   const token = policy.generateUnsubscribeToken();
-  unsubscribeForm.set("token", token);
+  const signed = policy.signUnsubscribeToken(token, process.env.SUPABASE_SECRET_KEY);
+  unsubscribeForm.set("token", signed);
   failure = false;
-  assert.ok((await actions.unsubscribeNewsletter({}, unsubscribeForm)).success);
+  assert.deepEqual(await actions.unsubscribeNewsletter({}, unsubscribeForm), genericResult);
   assert.deepEqual(calls.at(-1), ["unsubscribe_newsletter", { p_token: token }]);
+  assert.deepEqual(await actions.unsubscribeNewsletter({}, unsubscribeForm), genericResult);
+  unsubscribeForm.set("token", signed.slice(0, -1) + (signed.endsWith("a") ? "b" : "a"));
+  const before = calls.length;
+  assert.deepEqual(await actions.unsubscribeNewsletter({}, unsubscribeForm), genericResult);
+  assert.equal(calls.length, before);
+  const expired = policy.signUnsubscribeToken(token, process.env.SUPABASE_SECRET_KEY,
+    Date.now() - (policy.unsubscribeLinkLifetimeSeconds + 1) * 1000);
+  unsubscribeForm.set("token", expired);
+  assert.deepEqual(await actions.unsubscribeNewsletter({}, unsubscribeForm), genericResult);
+  assert.equal(calls.length, before);
+  } finally {
+    if (oldSecret === undefined) delete process.env.SUPABASE_SECRET_KEY;
+    else process.env.SUPABASE_SECRET_KEY = oldSecret;
+  }
+});
+
+test("unsubscribe route redirects without reflecting bearer tokens or roster state", async () => {
+  const form = new FormData();
+  form.set("token", "secret-link-value");
+  const route = loadModule("app/api/newsletter/unsubscribe/route.ts", {
+    "@/lib/newsletter/actions": { unsubscribeNewsletter: async () => ({ success: "updated" }) },
+  });
+  const response = await route.POST(new Request("https://example.test/api/newsletter/unsubscribe", { method: "POST", body: form }));
+  assert.equal(response.status, 303);
+  assert.equal(response.headers.get("location"), "https://example.test/newsletter/unsubscribe?status=done");
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+  assert.doesNotMatch(response.headers.get("location"), /secret-link-value/);
+  const malformed = await route.POST(new Request("https://example.test/api/newsletter/unsubscribe", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+  }));
+  assert.equal(malformed.headers.get("location"), response.headers.get("location"));
+  const failedRoute = loadModule("app/api/newsletter/unsubscribe/route.ts", {
+    "@/lib/newsletter/actions": { unsubscribeNewsletter: async () => ({ error: "temporary failure" }) },
+  });
+  const failed = await failedRoute.POST(new Request("https://example.test/api/newsletter/unsubscribe", { method: "POST", body: form }));
+  assert.equal(failed.headers.get("location"), "https://example.test/newsletter/unsubscribe?status=error");
 });
 
 test("IP window stops rotated addresses before a database write", async () => {

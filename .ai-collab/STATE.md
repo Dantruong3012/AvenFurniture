@@ -1,7 +1,7 @@
 # Workflow state
 
-Active task: -
-Current phase: IDLE
+Active task: newsletter-unsubscribe
+Current phase: APPROVED
 Last completed task: newsletter-subscribe
 Next task: newsletter-unsubscribe
 Blockers: -

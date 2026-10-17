@@ -3,7 +3,7 @@
 import { headers } from "next/headers";
 import { allowAuthMutation } from "@/lib/auth/mutation";
 import { createServiceClient } from "@/lib/supabase/admin";
-import { consentMetadataHashes, generateUnsubscribeToken, hashUnsubscribeToken, newsletterRateIdentity, newsletterRateLimits, parseNewsletterConsent, verifyUnsubscribeToken } from "./policy";
+import { consentMetadataHashes, generateUnsubscribeToken, hashUnsubscribeToken, newsletterRateIdentity, newsletterRateLimits, parseNewsletterConsent, verifySignedUnsubscribeToken } from "./policy";
 import type { NewsletterActionState } from "./types";
 
 /** Public opt-in. The same response for new and existing email addresses prevents roster discovery. */
@@ -32,15 +32,21 @@ export async function subscribeNewsletter(_previous: NewsletterActionState, form
   } catch {
     return { error: "Unable to save your preference. Please try again later." };
   }
-  // A delivery integration must send the raw token to the address on first insert.
-  // It must never expose the token in this public response or write it to logs.
+  // Delivery must use signUnsubscribeToken(token, process.env.SUPABASE_SECRET_KEY)
+  // on first insert. Never expose a bearer token in the public response or logs.
   return { success: "Your newsletter preference has been received." };
 }
 
 /** May be called without a session; only possession of the 256-bit token authorizes the change. */
 export async function unsubscribeNewsletter(_previous: NewsletterActionState, form: FormData): Promise<NewsletterActionState> {
-  const verification = verifyUnsubscribeToken(form.get("token"));
-  if (!verification.valid) return { error: "This unsubscribe link is invalid." };
+  let verification;
+  try {
+    verification = verifySignedUnsubscribeToken(form.get("token"), process.env.SUPABASE_SECRET_KEY ?? "");
+  } catch {
+    return { error: "Unable to update your preference. Please try again later." };
+  }
+  const genericResult = { success: "If this link is valid, your newsletter preference has been updated." };
+  if (!verification.valid) return genericResult;
   if (!(await allowAuthMutation("newsletter-unsubscribe", verification.token, 20))) {
     return { error: "Please wait before trying again." };
   }
@@ -50,5 +56,5 @@ export async function unsubscribeNewsletter(_previous: NewsletterActionState, fo
   } catch {
     return { error: "Unable to update your preference. Please try again later." };
   }
-  return { success: "You are unsubscribed." };
+  return genericResult;
 }
