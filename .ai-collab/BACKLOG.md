@@ -38,11 +38,9 @@ Only Antigravity adds tasks from a roadmap approved by the user. Each task also 
 | email-delivery-policy | P1 | - | Antigravity | BACKLOG | NEEDS_DECISION | Choose provider, sender domain and scheduled dispatch infrastructure | - |
 | email-provider-adapter | P1 | email-delivery-policy | Codex | BACKLOG | NEEDS_DECISION | Production mail adapter preserves outbox retries and secret isolation | - |
 | outbox-scheduler | P1 | email-delivery-policy,email-outbox-dispatch | Codex | BACKLOG | NEEDS_DECISION | Authenticated scheduled dispatch safely claims pending outbox jobs | - |
-| commerce-architecture | P1 | - | Antigravity | BACKLOG | NEEDS_DECISION | Approve order lifecycle, tax, shipping, inventory, payment provider and migration design | - |
-| order-checkout | P2 | commerce-architecture | Codex | BACKLOG | NEEDS_DECISION | Persist server priced orders and idempotent checkout under approved model | - |
-| payment-integration | P2 | order-checkout | Codex | BACKLOG | NEEDS_DECISION | Verified provider webhooks update payment and order state exactly once | - |
+<!-- commerce-architecture, order-checkout, payment-integration removed 2026-10-17: AvenFurniture has no online payments. Primary product CTA is Zalo direct contact (storefront-consultant-zalo, DONE). -->
 | customer-identity-policy | P1 | - | Antigravity | BACKLOG | NEEDS_DECISION | Approve customer identity, privacy, conflict and Auth or RLS model | - |
-| cart-sync | P2 | customer-identity-policy | Codex | BACKLOG | NEEDS_DECISION | Authenticated cart synchronizes across devices with deterministic conflict resolution | - |
+| cart-sync | P2 | customer-identity-policy | Codex | BACKLOG | NEEDS_DECISION | Guest quote-request cart synchronization (no payment, inquiry model only) | - |
 | wishlist-sync | P2 | customer-identity-policy | Codex | BACKLOG | NEEDS_DECISION | Authenticated wishlist synchronizes across devices with guest migration | - |
 | release-pipeline-policy | P1 | - | Antigravity | BACKLOG | NEEDS_DECISION | Approve PR creation, CI contracts, controlled merge and deployment tracking activation | - |
 | release-pr-ci | P1 | release-pipeline-policy | Codex | BACKLOG | NEEDS_DECISION | Reconcile dev PR and required CI without automatic merge | - |

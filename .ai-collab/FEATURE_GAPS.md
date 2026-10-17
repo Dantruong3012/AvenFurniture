@@ -14,7 +14,7 @@ The current MVP documents specify only `super_admin` and `staff`, an inquiry car
 | Collections | `lib/data/editorial.ts` has three static cards; `/collections` has no product association/filter. | Durable association, published-only filtering and empty states. |
 | Email | Outbox worker, templates, mock/staging/console mailers, and worker-level health/scoped retry helpers exist. | Admin health surface, approved retry control, durable change events, Production provider, scheduler and end-to-end delivery proof. |
 | Inquiry assignment | Repository supports `assignee_id`; admin UI/action does not change it. | Assign/unassign active staff, audit and safe validation. |
-| Orders/payment | Inquiry cart and customer inquiry lookup exist; order, checkout and payment lifecycle do not. | Approved commerce model, authoritative prices, idempotent checkout and verified payment events. |
+| Orders/payment | Out of scope per owner directive (2026-10-17). AvenFurniture is a furniture showroom and consultation site with Zalo contact and quote-request cart; no checkout, orders or payment integration. | None (removed from roadmap). |
 | Cart/wishlist sync | Both persist in localStorage on one browser only. | Approved customer identity and cross-device persistence/conflict handling. |
 | Release pipeline | GitHub PR/CI, controlled merge and Vercel observer adapters exist. Production release flag is off. | Connected PR/CI lifecycle, controlled activation and exact deployment tracking. Safe dev push is handled separately in this runner upgrade. |
 
@@ -45,9 +45,7 @@ Priority and dependencies are in `BACKLOG.md`. `BACKLOG` with `APPROVED` means e
 | email-delivery-policy | Owner selects provider/sender domain and scheduler/auth infrastructure; operational and cost decision recorded. | `src/docs/06-production.md` | No billing, credentials or Production config change. |
 | email-provider-adapter | Provider adapter uses existing outbox retry/idempotency interface; failure/redaction tests. | `lib/email/`, `tests/email-outbox.test.mjs` | Secret server-side, no live send in tests. |
 | outbox-scheduler | Protected scheduler dispatches bounded jobs and rejects unauthenticated requests; lease/retry tests. | `app/api/`, `lib/email/`, `tests/email-outbox.test.mjs` | No shared DB dispatch during tests. |
-| commerce-architecture | Owner approves order/payment provider, currencies, tax, shipping, inventory, refund and migration model. | `src/docs/02-architecture.md`, `src/docs/03-features.md` | No mock checkout called complete; no purchases. |
-| order-checkout | Server prices and persists order once per key; unavailable items rejected; local integration tests. | `app/`, `lib/`, `supabase/migrations/`, `tests/` | No Production migration or charge. |
-| payment-integration | Signed webhook reconciles duplicate/out-of-order events and updates state once; fixture tests. | `app/api/`, `lib/`, `tests/` | Never log payment secrets or use live charges. |
+<!-- commerce-architecture, order-checkout, payment-integration removed 2026-10-17 per project owner directive. AvenFurniture has no online payments. Primary product CTA is Zalo direct contact (storefront-consultant-zalo, DONE). -->
 | customer-identity-policy | Owner approves sign-in model, consent, guest merge and conflict rules, including Auth/RLS design. | `src/docs/07-mvp-plan.md`, `src/docs/09-session-security.md` | No customer Auth/RLS change before approval. |
 | cart-sync | Authenticated cart syncs two devices and merges guest data per approved rule; local multi-session tests. | `app/cart/`, `components/cart/`, `lib/`, `tests/` | Users can access only own cart. |
 | wishlist-sync | Authenticated wishlist syncs two devices and migrates guest list; local multi-session tests. | `app/wishlist/`, `components/`, `lib/`, `tests/` | Users can access only own wishlist. |
