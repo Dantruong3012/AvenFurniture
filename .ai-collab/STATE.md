@@ -3,7 +3,7 @@
 Active task: -
 Current phase: IDLE
 Last completed task: newsletter-unsubscribe
-Next task: -
+Next task: staff-auth-policy
 Blockers: -
 Last successful commit: d8b20336b45a032bf0c9361cdc4c56394253d073
 

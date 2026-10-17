@@ -23,10 +23,10 @@ Only Antigravity adds tasks from a roadmap approved by the user. Each task also 
 | outbox-admin-retry | P1 | outbox-admin-health,email-delivery-policy | Codex | BACKLOG | NEEDS_DECISION | Authorized admin can request selected failed-job retries under approved provider and scheduler policy | - |
 | email-event-schema-policy | P1 | - | Antigravity | DONE | APPROVED | Approve durable event schema, payload model, mock/deferred provider contract, and idempotency rules | ad823ac31dc92e256bf1493c6e161a627139a2be |
 | email-change-events | P1 | email-event-schema-policy,inquiry-assignment | Codex | DONE | APPROVED | Transactional event queueing for inquiry assignment and status updates with idempotency and mock delivery | 195ef51384322066e6e2b0c2cf73ae99bba942d1 |
-| staff-auth-policy | P0 | - | Antigravity | BACKLOG | NEEDS_DECISION | Approve invite, role, disable and deletion policy including Auth session handling and RLS | - |
-| staff-invite | P1 | staff-auth-policy | Codex | BACKLOG | NEEDS_DECISION | Super admin invites staff with retry safe Auth and profile lifecycle | - |
-| staff-role-status | P1 | staff-auth-policy | Codex | BACKLOG | NEEDS_DECISION | Super admin updates role and active status with last admin and session safeguards | - |
-| staff-delete | P2 | staff-auth-policy | Codex | BACKLOG | NEEDS_DECISION | Approved removal policy preserves inquiry and audit history | - |
+| staff-auth-policy | P0 | - | Antigravity | READY | APPROVED | Approve invite, role, disable and deletion policy including Auth session handling, super_admin lockout protection and RLS | - |
+| staff-invite | P1 | staff-auth-policy | Codex | BACKLOG | APPROVED | Super admin invites staff with retry safe Auth and profile lifecycle | - |
+| staff-role-status | P1 | staff-auth-policy | Codex | BACKLOG | APPROVED | Super admin updates role and active status with last admin and session safeguards | - |
+| staff-delete | P2 | staff-auth-policy | Codex | BACKLOG | APPROVED | Approved removal policy preserves inquiry and audit history | - |
 | newsletter-data-policy | P1 | - | Antigravity | DONE | APPROVED | Approve newsletter subscriber schema, opt-in consent, retention, tokenized unsubscribe, and RLS policy | a85851084dee568971ea324c80915c62c57c5fc5 |
 | newsletter-subscribe | P1 | newsletter-data-policy | Codex | DONE | APPROVED | Storefront newsletter subscription with email validation, rate limiting, duplicate prevention and opt-in audit | cc1f907af73aff202ddf0dbb51ec3b72b8cce4e7 |
 | newsletter-unsubscribe | P1 | newsletter-subscribe | Codex | DONE | APPROVED | Signed token unsubscribe route revoking subscriber consent safely without leaking list data | d8b20336b45a032bf0c9361cdc4c56394253d073 |
@@ -39,9 +39,9 @@ Only Antigravity adds tasks from a roadmap approved by the user. Each task also 
 | email-provider-adapter | P1 | email-delivery-policy | Codex | BACKLOG | NEEDS_DECISION | Production mail adapter preserves outbox retries and secret isolation | - |
 | outbox-scheduler | P1 | email-delivery-policy,email-outbox-dispatch | Codex | BACKLOG | NEEDS_DECISION | Authenticated scheduled dispatch safely claims pending outbox jobs | - |
 <!-- commerce-architecture, order-checkout, payment-integration removed 2026-10-17: AvenFurniture has no online payments. Primary product CTA is Zalo direct contact (storefront-consultant-zalo, DONE). -->
-| customer-identity-policy | P1 | - | Antigravity | BACKLOG | NEEDS_DECISION | Approve customer identity, privacy, conflict and Auth or RLS model | - |
-| cart-sync | P2 | customer-identity-policy | Codex | BACKLOG | NEEDS_DECISION | Guest quote-request cart synchronization (no payment, inquiry model only) | - |
-| wishlist-sync | P2 | customer-identity-policy | Codex | BACKLOG | NEEDS_DECISION | Authenticated wishlist synchronizes across devices with guest migration | - |
+| customer-identity-policy | P1 | - | Antigravity | READY | APPROVED | Approve customer identity, privacy, conflict and Auth or RLS model (inquiry/wishlist only, no checkout) | - |
+| cart-sync | P2 | customer-identity-policy | Codex | BACKLOG | APPROVED | Guest quote-request cart synchronization across devices (no payment, inquiry model only) | - |
+| wishlist-sync | P2 | customer-identity-policy | Codex | BACKLOG | APPROVED | Authenticated wishlist synchronizes across devices with guest migration | - |
 | release-pipeline-policy | P1 | - | Antigravity | BACKLOG | NEEDS_DECISION | Approve PR creation, CI contracts, controlled merge and deployment tracking activation | - |
 | release-pr-ci | P1 | release-pipeline-policy | Codex | BACKLOG | NEEDS_DECISION | Reconcile dev PR and required CI without automatic merge | - |
 | release-merge-tracking | P2 | release-pr-ci | Codex | BACKLOG | NEEDS_DECISION | Apply signed merge approval and track exact deployed SHA without autonomous Production deploy | - |
