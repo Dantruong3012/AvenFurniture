@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import { BagIcon, CloseIcon, HeartIcon, MenuIcon, SearchIcon } from "@/components/ui/icons";
 import { useStore } from "@/components/store/store-provider";
 
-const links = [["Collections","/collections"],["Products","/products"],["Inspiration","/inspiration"],["About","/about"],["Contact","/contact"]];
+const links = [["Collections","/collections"],["Products","/products"],["Inspiration","/inspiration"],["About","/about"],["Consultants","/consultants"],["Contact","/contact"]];
 
 export function Header() {
   const pathname = usePathname();
@@ -27,7 +27,7 @@ export function Header() {
           <Image src="/brand/aven-furniture-logo.jpg" alt="" width={932} height={951} priority className="brand-mark" />
           <span>AvenFurniture</span>
         </Link>
-        <nav className="desktop-nav" aria-label="Primary navigation">
+        <nav className="desktop-nav" aria-label="Primary navigation" style={{ gap: "clamp(10px, 1.3vw, 24px)" }}>
           {links.map(([label, href]) => <Link key={href} href={href} className={pathname === href ? "active" : ""}>{label}</Link>)}
           <Link href="/admin" className={pathname.startsWith("/admin") ? "active" : ""}>Admin</Link>
         </nav>

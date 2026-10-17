@@ -1,7 +1,7 @@
 # Workflow state
 
-Active task: -
-Current phase: IDLE
+Active task: storefront-consultant-zalo
+Current phase: APPROVED
 Last completed task: email-outbox-dispatch
 Next task: -
 Blockers: -
