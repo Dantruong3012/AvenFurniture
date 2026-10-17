@@ -1,7 +1,7 @@
 # Workflow state
 
-Active task: -
-Current phase: IDLE
+Active task: release-m4-github-ci
+Current phase: APPROVED
 Last completed task: admin-inquiry-export-metrics
 Next task: -
 Blockers: -
