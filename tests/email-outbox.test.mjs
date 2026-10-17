@@ -6,12 +6,76 @@ import { PGlite } from "@electric-sql/pglite";
 import { createClient } from "@supabase/supabase-js";
 import { loadModule } from "./helpers/load-module.mjs";
 
-const { calculateRetryDelay, createSupabaseOutboxStore, dispatchOutboxBatch, dispatchScopedOutboxRetry, getOutboxHealthSummary, inspectOutboxHealth, runOutboxWorker } = loadModule("lib/email/outbox.ts", { "server-only": {} });
-const { createMockMailer, createStagingMailer, createConsoleMailer } = loadModule("lib/email/mailer.ts", { "server-only": {} });
+const { calculateRetryDelay, createSupabaseOutboxStore, dispatchOutboxBatch, dispatchScopedOutboxRetry, emailEventIdempotencyKey, enqueueEmailEvent, getOutboxHealthSummary, inspectOutboxHealth, runOutboxWorker, validateEmailEventDraft } = loadModule("lib/email/outbox.ts", { "server-only": {} });
+const { createMockMailer, createDeferredMailer, createStagingMailer, createConsoleMailer } = loadModule("lib/email/mailer.ts", { "server-only": {} });
 const message = { to: "customer@example.com", subject: "Inquiry received", text: "Thank you", html: "<p>Thank you</p>" };
 const delivery = (idempotencyKey = randomUUID()) => ({ idempotencyKey, signal: new AbortController().signal });
 const epoch = Date.parse("2026-10-17T00:00:00Z");
 const iso = (time) => new Date(time).toISOString();
+
+test("versioned event payloads validate before a transaction is touched", async () => {
+  const inquiryId = randomUUID(), occurrence_id = randomUUID();
+  const received = { schema_version: 1, event_type: "inquiry.received", occurrence_id, payload: { inquiryId, template: "customer_confirmation", data: { to: "customer@example.com", customerName: "Ari", items: [{ name: "Oak table", quantity: 1 }] } } };
+  const assigned = { schema_version: 1, event_type: "inquiry.assigned", occurrence_id, payload: { inquiryId, template: "consultant_assignment", data: { to: "staff@example.com", inquiryId, customerName: "Ari", adminUrl: "https://example.test/admin", notes: "First line\nSecond line" } } };
+  const status = { schema_version: 1, event_type: "inquiry.status_changed", occurrence_id, payload: { inquiryId, template: "status_update", data: { to: "customer@example.com", inquiryId, customerName: "Ari", recipient: "customer", status: "completed" } } };
+  const quote = { schema_version: 1, event_type: "quote.requested", occurrence_id, payload: { inquiryId, to: "staff@example.com", customerName: "Ari" } };
+  for (const draft of [received, assigned, status, quote]) assert.deepEqual(validateEmailEventDraft(draft), draft);
+  let writes = 0;
+  const transaction = { insertOrGet: async () => { writes++; assert.fail("Invalid event reached transaction"); } };
+  for (const invalid of [
+    { ...received, schema_version: 2 }, { ...received, event_type: "unknown" }, { ...received, occurrence_id: "bad" },
+    { ...received, payload: { ...received.payload, template: "status_update" } },
+    { ...received, payload: { ...received.payload, extra: "private" } },
+    { ...received, payload: { ...received.payload, data: { ...received.payload.data, to: "a@example.com\nBcc:x@example.com" } } },
+    { ...received, payload: { ...received.payload, data: { ...received.payload.data, reference: undefined } } },
+    { ...received, payload: { ...received.payload, data: { ...received.payload.data, items: [{ name: "Oak", quantity: 0 }] } } },
+    { ...assigned, payload: { ...assigned.payload, data: { ...assigned.payload.data, inquiryId: randomUUID() } } },
+    { ...status, payload: { ...status.payload, data: { ...status.payload.data, recipient: "everyone" } } },
+    { ...quote, payload: { ...quote.payload, to: "bad" } },
+  ]) await assert.rejects(enqueueEmailEvent(transaction, invalid), /Invalid email event/);
+  assert.equal(writes, 0);
+});
+
+test("event idempotency uses occurrence and type, with atomic insert-or-get semantics", async () => {
+  const occurrence_id = randomUUID(), inquiryId = randomUUID();
+  const draft = { schema_version: 1, event_type: "quote.requested", occurrence_id, payload: { inquiryId, to: "staff@example.com", customerName: "Ari" } };
+  const rows = new Map();
+  let inserts = 0;
+  const transaction = { async insertOrGet(input) {
+    const existing = rows.get(input.idempotency_key);
+    if (existing) return existing;
+    inserts++;
+    const row = { id: randomUUID(), schema_version: input.schema_version, event_type: input.event_type, payload: input.payload, idempotency_key: input.idempotency_key,
+      status: "pending", attempts: 0, last_error: null, created_at: iso(epoch), updated_at: iso(epoch) };
+    rows.set(input.idempotency_key, row);
+    return row;
+  } };
+  const first = await enqueueEmailEvent(transaction, draft);
+  assert.deepEqual(await enqueueEmailEvent(transaction, { ...draft, occurrence_id: occurrence_id.toUpperCase() }), first);
+  assert.equal(inserts, 1);
+  assert.match(first.idempotency_key, /^[0-9a-f]{64}$/);
+  assert.equal(first.idempotency_key, emailEventIdempotencyKey(draft.event_type, occurrence_id));
+  assert.notEqual(first.idempotency_key, emailEventIdempotencyKey("inquiry.received", occurrence_id));
+  await assert.rejects(enqueueEmailEvent(transaction, { ...draft, payload: { ...draft.payload, to: "other@example.com" } }), /idempotency conflict/);
+  assert.equal(inserts, 1);
+  await assert.rejects(enqueueEmailEvent({ insertOrGet: async () => { throw new Error("transaction rolled back"); } }, draft), /transaction rolled back/);
+});
+
+test("mock failure simulation and deferred provider are deterministic and inspectable", async () => {
+  const options = delivery(), mock = createMockMailer({ failAttempts: { [options.idempotencyKey]: 1 } });
+  await assert.rejects(mock.send(message, options), /Mock email delivery failed/);
+  assert.equal(mock.deliveries.length, 0);
+  const receipt = await mock.send(message, options);
+  assert.deepEqual(await mock.send(message, options), receipt);
+  assert.equal(mock.deliveries.length, 1);
+  const deferred = createDeferredMailer();
+  assert.deepEqual(await deferred.send(message, options), { deferred: true, token: `deferred:${options.idempotencyKey}` });
+  assert.deepEqual(await deferred.send(message, options), { deferred: true, token: `deferred:${options.idempotencyKey}` });
+  const snapshot = deferred.deferrals;
+  snapshot[0].message.to = "changed@example.com";
+  assert.equal(deferred.deferrals[0].message.to, message.to);
+  assert.equal(deferred.deferrals.length, 2);
+});
 
 test("retry delay grows exponentially with bounded equal jitter and a ceiling", () => {
   const retry = { baseDelayMs: 1000, maxDelayMs: 5000 };
@@ -284,6 +348,21 @@ test("outbox integration with real query builder and isolated PostgreSQL", async
     assert.deepEqual(await dispatchOutboxBatch(options({ mailer })), []);
   });
 
+  await scenario("deferred delivery remains pending and never stores a sent receipt", async () => {
+    const row = await insert(), mailer = createDeferredMailer();
+    const config = options({ mailer, retry: { maxAttempts: 2 } });
+    assert.deepEqual(await dispatchOutboxBatch(config), [{ id: row.id, status: "retry" }]);
+    const pending = await get(row.id);
+    assert.equal(pending.status, "pending");
+    assert.equal(pending.provider_message_id, null);
+    assert.equal(Date.parse(pending.next_attempt_at), epoch + 500);
+    assert.deepEqual(await dispatchOutboxBatch(config), []);
+    time = Date.parse(pending.next_attempt_at);
+    assert.deepEqual(await dispatchOutboxBatch(config), [{ id: row.id, status: "failed" }]);
+    assert.equal((await get(row.id)).provider_message_id, null);
+    assert.deepEqual(mailer.deferrals.map(({ token }) => token), [`deferred:${row.event_id}`, `deferred:${row.event_id}`]);
+  });
+
   await scenario("failures retry only when due, back off exponentially and terminate at max attempts", async () => {
     const row = await insert();
     let sends = 0;
@@ -358,7 +437,8 @@ test("outbox integration with real query builder and isolated PostgreSQL", async
   });
 
   await scenario("invalid provider receipts retry instead of marking delivered", async () => {
-    for (const receipt of [undefined, {}, { messageId: 42 }, { messageId: " " }, { messageId: "x\ny" }, { messageId: "x".repeat(513) }]) {
+    for (const receipt of [undefined, {}, { messageId: 42 }, { messageId: " " }, { messageId: "x\ny" }, { messageId: "x".repeat(513) },
+      { deferred: true, token: " " }, { deferred: true, token: "x\ny" }]) {
       await db.exec("delete from email_outbox");
       await insert();
       assert.equal((await dispatchOutboxBatch(options({ mailer: { send: async () => receipt } })))[0].status, "retry");

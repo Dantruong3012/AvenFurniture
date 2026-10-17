@@ -1,12 +1,90 @@
 import "server-only";
+import { createHash } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/lib/supabase/database.types";
 import type { OutboxHealthSummary } from "@/lib/types";
 import { renderEmailTemplate } from "./templates";
-import type { DeliveryOutcome, DispatchResult, OutboxLoopOptions, OutboxRecord, OutboxStore, OutboxWorkerOptions, RetryPolicy } from "./types";
+import type { DeliveryOutcome, DispatchResult, EmailEventDraft, EmailEventTransaction, EmailEventType, EmailOutboxEvent, OutboxLoopOptions, OutboxRecord, OutboxStore, OutboxWorkerOptions, RetryPolicy } from "./types";
 
 const defaultRetry: RetryPolicy = { maxAttempts: 5, baseDelayMs: 1_000, maxDelayMs: 3_600_000 };
 const iso = (time: number) => new Date(time).toISOString();
+
+const eventTypes: readonly EmailEventType[] = ["inquiry.received", "inquiry.assigned", "inquiry.status_changed", "quote.requested"];
+const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const email = /^[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+$/;
+
+function object(value: unknown, required: readonly string[], optional: readonly string[] = []): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) throw new Error("Invalid email event payload.");
+  const record = value as Record<string, unknown>;
+  if (required.some((key) => !Object.hasOwn(record, key)) || Object.keys(record).some((key) =>
+    (!required.includes(key) && !optional.includes(key)) || record[key] === undefined)) throw new Error("Invalid email event payload.");
+  return record;
+}
+
+function eventText(value: unknown, max: number): value is string {
+  return typeof value === "string" && value.trim().length > 0 && value.length <= max && !/[\r\n\u0000-\u001f]/.test(value);
+}
+
+/** Strict, version-one event payload validation before any persistence call. */
+export function validateEmailEventDraft(input: unknown): EmailEventDraft {
+  const draft = object(input, ["schema_version", "event_type", "occurrence_id", "payload"]);
+  if (draft.schema_version !== 1 || !eventTypes.includes(draft.event_type as EmailEventType) || typeof draft.occurrence_id !== "string" || !uuid.test(draft.occurrence_id)) throw new Error("Invalid email event metadata.");
+  const payload = object(draft.payload, draft.event_type === "quote.requested" ? ["inquiryId", "to", "customerName"] : ["inquiryId", "template", "data"], draft.event_type === "quote.requested" ? ["reference"] : []);
+  if (typeof payload.inquiryId !== "string" || !uuid.test(payload.inquiryId)) throw new Error("Invalid email event payload.");
+  if (draft.event_type === "quote.requested") {
+    if (!eventText(payload.to, 254) || !email.test(payload.to) || !eventText(payload.customerName, 120)) throw new Error("Invalid email event payload.");
+  } else {
+    const expected = { "inquiry.received": "customer_confirmation", "inquiry.assigned": "consultant_assignment", "inquiry.status_changed": "status_update" }[draft.event_type as Exclude<EmailEventType, "quote.requested">];
+    if (payload.template !== expected) throw new Error("Invalid email event payload.");
+    const required = draft.event_type === "inquiry.received" ? ["to", "customerName"] : draft.event_type === "inquiry.assigned" ? ["to", "inquiryId", "customerName", "adminUrl"] : ["to", "recipient", "inquiryId", "customerName", "status"];
+    const optional = draft.event_type === "inquiry.received" ? ["reference", "items"] : draft.event_type === "inquiry.assigned" ? ["customerEmail", "customerPhone", "notes"] : ["previousStatus", "reference"];
+    const data = object(payload.data, required, optional);
+    if (!eventText(data.to, 254) || !email.test(data.to) || !eventText(data.customerName, 120)) throw new Error("Invalid email event payload.");
+    if (draft.event_type !== "inquiry.received" && data.inquiryId !== payload.inquiryId) throw new Error("Invalid email event payload.");
+    if (draft.event_type === "inquiry.assigned") {
+      if (!eventText(data.adminUrl, 2048)) throw new Error("Invalid email event payload.");
+      try { const url = new URL(data.adminUrl); if (!/^https?:$/.test(url.protocol)) throw new Error(); } catch { throw new Error("Invalid email event payload."); }
+    }
+    if (draft.event_type === "inquiry.status_changed" && (!eventText(data.status, 80) || !["customer", "staff"].includes(data.recipient as string))) throw new Error("Invalid email event payload.");
+    if (draft.event_type === "inquiry.received" && data.items !== undefined) {
+      if (!Array.isArray(data.items) || data.items.length > 100 || data.items.some((item) => {
+        const entry = object(item, ["name", "quantity"], ["unitPrice", "currency"]);
+        return !eventText(entry.name, 200) || !Number.isSafeInteger(entry.quantity) || (entry.quantity as number) < 1 ||
+          (entry.unitPrice != null && (typeof entry.unitPrice !== "number" || !Number.isFinite(entry.unitPrice) || entry.unitPrice < 0)) ||
+          (entry.currency !== undefined && !eventText(entry.currency, 3));
+      })) throw new Error("Invalid email event payload.");
+    }
+    if (data.customerEmail != null && (!eventText(data.customerEmail, 254) || !email.test(data.customerEmail))) throw new Error("Invalid email event payload.");
+    for (const key of ["customerPhone", "previousStatus"]) if (data[key] !== undefined && !eventText(data[key], 120)) throw new Error("Invalid email event payload.");
+    if (data.notes !== undefined && (typeof data.notes !== "string" || data.notes.length > 2000 || /\u0000/.test(data.notes))) throw new Error("Invalid email event payload.");
+    if (data.reference !== undefined && !(typeof data.reference === "number" && Number.isSafeInteger(data.reference) && data.reference >= 0) && !eventText(data.reference, 80)) throw new Error("Invalid email event payload.");
+  }
+  if (payload.reference !== undefined && !(typeof payload.reference === "number" && Number.isSafeInteger(payload.reference) && payload.reference >= 0) && !eventText(payload.reference, 80)) throw new Error("Invalid email event payload.");
+  return structuredClone(draft) as EmailEventDraft;
+}
+
+/** A business occurrence, rather than message contents, determines deduplication. */
+export function emailEventIdempotencyKey(eventType: EmailEventType, occurrenceId: string): string {
+  if (!eventTypes.includes(eventType) || !uuid.test(occurrenceId)) throw new Error("Invalid email event metadata.");
+  return createHash("sha256").update(`email:v1\0${eventType}\0${occurrenceId.toLowerCase()}`).digest("hex");
+}
+
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value && typeof value === "object") return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical((value as Record<string, unknown>)[key])}`).join(",")}}`;
+  return JSON.stringify(value);
+}
+
+/** The supplied transaction owns the atomic insert/unique-conflict read and
+ * must commit with the domain mutation. Conflicting payloads for one occurrence
+ * are rejected rather than silently accepting a different email. */
+export async function enqueueEmailEvent(transaction: EmailEventTransaction, input: EmailEventDraft): Promise<EmailOutboxEvent> {
+  const draft = validateEmailEventDraft(input);
+  const key = emailEventIdempotencyKey(draft.event_type, draft.occurrence_id);
+  const saved = await transaction.insertOrGet({ ...draft, idempotency_key: key });
+  if (saved.idempotency_key !== key || saved.schema_version !== draft.schema_version || saved.event_type !== draft.event_type || canonical(saved.payload) !== canonical(draft.payload)) throw new Error("Email event idempotency conflict.");
+  return saved;
+}
 
 function positiveInteger(value: number, name: string, max = 2_147_483_647) {
   if (!Number.isSafeInteger(value) || value < 1 || value > max) throw new Error(`Invalid ${name}.`);
@@ -238,8 +316,15 @@ export async function dispatchOutboxBatch(options: OutboxWorkerOptions): Promise
           }, Math.min(timeoutMs, remaining));
         }),
       ]);
-      if (typeof receipt?.messageId !== "string" || !receipt.messageId.trim() || receipt.messageId.length > 512 || /[\r\n]/.test(receipt.messageId)) throw new Error("Invalid delivery receipt.");
-      outcome = { status: "sent", messageId: receipt.messageId };
+      if (receipt?.deferred === true) {
+        if (typeof receipt.token !== "string" || !receipt.token.trim() || receipt.token.length > 512 || /[\r\n]/.test(receipt.token)) throw new Error("Invalid deferral token.");
+        const terminal = record.attempts >= retry.maxAttempts;
+        outcome = { status: terminal ? "failed" : "pending", error: "Email delivery deferred.",
+          nextAttemptAt: iso(now() + (terminal ? 0 : calculateRetryDelay(record.attempts, retry, options.random))) };
+      } else {
+        if (typeof receipt?.messageId !== "string" || !receipt.messageId.trim() || receipt.messageId.length > 512 || /[\r\n]/.test(receipt.messageId)) throw new Error("Invalid delivery receipt.");
+        outcome = { status: "sent", messageId: receipt.messageId };
+      }
     } catch {
       // Provider errors can contain addresses, message bodies or credentials.
       const terminal = record.attempts >= retry.maxAttempts;

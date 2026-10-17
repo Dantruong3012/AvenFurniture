@@ -12,15 +12,60 @@ export type EmailTemplatePayload =
   | { template: "consultant_assignment"; data: ConsultantAssignmentData }
   | { template: "status_update"; data: StatusUpdateData };
 export type EmailBuildResult = EmailMessage | EmailTemplatePayload;
+
+/** A domain occurrence ID is stable across retries. A new assignment or status
+ * change must use a new ID, even when it concerns the same inquiry. */
+export type EmailEventPayloads = {
+  "inquiry.received": { inquiryId: string; template: "customer_confirmation"; data: CustomerConfirmationData };
+  "inquiry.assigned": { inquiryId: string; template: "consultant_assignment"; data: ConsultantAssignmentData };
+  "inquiry.status_changed": { inquiryId: string; template: "status_update"; data: StatusUpdateData };
+  "quote.requested": { inquiryId: string; to: string; customerName: string; reference?: string | number };
+};
+export type EmailEventType = keyof EmailEventPayloads;
+export type EmailEventDraft = { [K in EmailEventType]: {
+  schema_version: 1; event_type: K; occurrence_id: string; payload: EmailEventPayloads[K];
+} }[EmailEventType];
+export type EmailOutboxEvent = { [K in EmailEventType]: {
+  id: string;
+  schema_version: 1;
+  event_type: K;
+  payload: EmailEventPayloads[K];
+  idempotency_key: string;
+  status: OutboxStatus;
+  attempts: number;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+} }[EmailEventType];
+
+/** Implement this inside the same database transaction as the domain change.
+ * The store must enforce UNIQUE(idempotency_key) and atomically insert or read
+ * the existing row. A pre-insert lookup is not sufficient for concurrent calls.
+ * The current email_outbox table lacks these columns; this is the contract for
+ * a future transactional adapter, not a claim that it already persists them. */
+export interface EmailEventTransaction {
+  insertOrGet(draft: EmailEventDraft & { idempotency_key: string }): Promise<EmailOutboxEvent>;
+}
 export type DeliveryOptions = { idempotencyKey: string; signal: AbortSignal };
-export type DeliveryReceipt = { messageId: string };
+export type DeliveryReceipt = { messageId: string; deferred?: never } | { deferred: true; token: string; messageId?: never };
+
+/** Deferred means no external send occurred. The worker keeps the row pending. */
+export interface EmailProviderClient {
+  send(message: EmailMessage, options: DeliveryOptions): Promise<DeliveryReceipt>;
+}
+export interface MockEmailProvider extends EmailProviderClient {
+  send(message: EmailMessage, options: DeliveryOptions): Promise<{ messageId: string }>;
+  readonly deliveries: { message: EmailMessage; idempotencyKey: string }[];
+}
+export interface DeferredEmailProvider extends EmailProviderClient {
+  send(message: EmailMessage, options: DeliveryOptions): Promise<{ deferred: true; token: string }>;
+  readonly deferrals: { message: EmailMessage; idempotencyKey: string; token: string }[];
+}
 
 /** Transports must honor cancellation and deduplicate by idempotencyKey.
  * Delivery is at least once: a process can die after sending but before saving.
  */
-export interface Mailer {
-  send(message: EmailMessage, options: DeliveryOptions): Promise<DeliveryReceipt>;
-}
+export type Mailer = EmailProviderClient;
 
 export type StagingMailerOptions = {
   environment: "development" | "test" | "staging";

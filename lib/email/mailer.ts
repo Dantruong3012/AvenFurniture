@@ -1,5 +1,5 @@
 import "server-only";
-import type { DeliveryOptions, DeliveryReceipt, EmailMessage, Mailer, StagingMailerOptions } from "./types";
+import type { DeferredEmailProvider, DeliveryOptions, EmailMessage, Mailer, MockEmailProvider, StagingMailerOptions } from "./types";
 
 function validate(message: EmailMessage, options: DeliveryOptions) {
   options.signal.throwIfAborted();
@@ -9,21 +9,42 @@ function validate(message: EmailMessage, options: DeliveryOptions) {
 }
 
 /** No network access. Repeated event IDs return the original receipt. */
-export function createMockMailer() {
+export function createMockMailer(options: { failAttempts?: Readonly<Record<string, number>> } = {}): MockEmailProvider {
   const deliveries: { message: EmailMessage; idempotencyKey: string }[] = [];
-  const receipts = new Map<string, DeliveryReceipt>();
+  const receipts = new Map<string, { messageId: string }>();
+  const remaining = new Map(Object.entries(options.failAttempts ?? {}));
   return {
     get deliveries() { return deliveries.map((delivery) => ({ ...delivery, message: { ...delivery.message } })); },
-    async send(message: EmailMessage, options: DeliveryOptions): Promise<DeliveryReceipt> {
+    async send(message: EmailMessage, options: DeliveryOptions): Promise<{ messageId: string }> {
       validate(message, options);
       const existing = receipts.get(options.idempotencyKey);
       if (existing) return { ...existing };
+      const failures = remaining.get(options.idempotencyKey) ?? 0;
+      if (failures > 0) {
+        remaining.set(options.idempotencyKey, failures - 1);
+        throw new Error("Mock email delivery failed.");
+      }
       const receipt = { messageId: `mock:${options.idempotencyKey}` };
       deliveries.push({ message: { ...message }, idempotencyKey: options.idempotencyKey });
       receipts.set(options.idempotencyKey, receipt);
       return { ...receipt };
     },
-  } satisfies Mailer & { readonly deliveries: { message: EmailMessage; idempotencyKey: string }[] };
+  };
+}
+
+/** Records the request locally and never delivers. A stable token lets tests
+ * inspect retries while the outbox keeps the event pending. */
+export function createDeferredMailer(): DeferredEmailProvider {
+  const deferrals: { message: EmailMessage; idempotencyKey: string; token: string }[] = [];
+  return {
+    get deferrals() { return deferrals.map((entry) => ({ ...entry, message: { ...entry.message } })); },
+    async send(message, options) {
+      validate(message, options);
+      const token = `deferred:${options.idempotencyKey}`;
+      deferrals.push({ message: { ...message }, idempotencyKey: options.idempotencyKey, token });
+      return { deferred: true, token };
+    },
+  };
 }
 
 /** A sandbox adapter, never a production transport selector. All envelopes go
