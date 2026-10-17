@@ -46,3 +46,28 @@ export interface Collection {
   description: string;
   image: string;
 }
+
+/** Frontmatter of a locally committed .md journal article. Dates are ISO calendar dates (YYYY-MM-DD). */
+export interface JournalFrontmatter {
+  slug: string;
+  title: string;
+  excerpt: string;
+  date: string;
+  author: string;
+  reviewer: string;
+  lastUpdated: string;
+  tags: string[];
+  coverImage: string;
+  seoTitle: string;
+  seoDescription: string;
+  zaloCtaText: string;
+  /** Provide at least one Zalo destination; validation enforces this rule. */
+  zaloCtaPhone?: string;
+  zaloCtaLink?: string;
+}
+
+/** Markdown body and validated frontmatter; no remote publication source is involved. */
+export interface JournalArticle {
+  frontmatter: JournalFrontmatter;
+  body: string;
+}

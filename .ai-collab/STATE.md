@@ -1,7 +1,7 @@
 # Workflow state
 
-Active task: -
-Current phase: IDLE
+Active task: journal-content-policy
+Current phase: APPROVED
 Last completed task: outbox-admin-health
 Next task: journal-content-policy
 Blockers: -
