@@ -3,7 +3,7 @@
 Status: READY_FOR_REVIEW
 Changed paths: components/layout/footer.tsx, lib/newsletter/actions.ts, lib/newsletter/policy.ts, lib/newsletter/types.ts, tests/newsletter-policy.test.mjs
 Commit: feat(newsletter-subscribe): implement approved task
-Commit hash: -
+Commit hash: cc1f907af73aff202ddf0dbb51ec3b72b8cce4e7
 
 Implemented the storefront newsletter form with shared email validation, rate limiting, duplicate-safe responses, and consent audit coverage.
 
