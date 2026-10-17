@@ -3,7 +3,7 @@
 Status: READY_FOR_REVIEW
 Changed paths: lib/vercel/deployment.ts, lib/vercel/types.ts, components/admin/deployment-observer.tsx, components/ui/error-boundary.tsx, tests/vercel-deployment.test.mjs
 Commit: feat(release-m6-production-tracking): implement approved task
-Commit hash: -
+Commit hash: 630795f7e0c2ee08ea9511562d26654a0f18b99f
 
 Implemented a read-only Production deployment observer that matches deployments to the target commit SHA, checks status with bounded polling, and handles API failures. Added a React error boundary and automated coverage.
 
