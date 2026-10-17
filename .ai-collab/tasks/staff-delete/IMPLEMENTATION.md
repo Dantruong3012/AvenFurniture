@@ -3,7 +3,7 @@
 Status: READY_FOR_REVIEW
 Changed paths: supabase/migrations/20261017233000_staff_deletion_policy.sql, lib/auth/admin.ts, lib/consultants/actions.ts, components/admin/team-management.tsx, components/admin/consultant-management.tsx, tests/staff-auth-policy.test.mjs
 Commit: feat(staff-delete): implement approved task
-Commit hash: -
+Commit hash: 58b436e6bdbe4a4bebae30ea83dd397629878ee1
 
 Implemented staff offboarding safeguards that preserve inquiry and audit history.
 
