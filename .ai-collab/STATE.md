@@ -1,7 +1,7 @@
 # Workflow state
 
-Active task: -
-Current phase: IDLE
+Active task: outbox-operations
+Current phase: APPROVED
 Last completed task: inquiry-assignment
 Next task: -
 Blockers: -

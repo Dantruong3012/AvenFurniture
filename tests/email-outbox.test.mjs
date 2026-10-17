@@ -6,7 +6,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { createClient } from "@supabase/supabase-js";
 import { loadModule } from "./helpers/load-module.mjs";
 
-const { calculateRetryDelay, createSupabaseOutboxStore, dispatchOutboxBatch, runOutboxWorker } = loadModule("lib/email/outbox.ts", { "server-only": {} });
+const { calculateRetryDelay, createSupabaseOutboxStore, dispatchOutboxBatch, dispatchScopedOutboxRetry, inspectOutboxHealth, runOutboxWorker } = loadModule("lib/email/outbox.ts", { "server-only": {} });
 const { createMockMailer, createStagingMailer, createConsoleMailer } = loadModule("lib/email/mailer.ts", { "server-only": {} });
 const message = { to: "customer@example.com", subject: "Inquiry received", text: "Thank you", html: "<p>Thank you</p>" };
 const delivery = (idempotencyKey = randomUUID()) => ({ idempotencyKey, signal: new AbortController().signal });
@@ -88,7 +88,7 @@ async function database(t) {
     global: { fetch: async (url, options) => {
       const { pathname, searchParams: params } = new URL(url);
       assert.equal(pathname, "/rest/v1/email_outbox");
-      assert.ok(["GET", "PATCH"].includes(options.method));
+      assert.ok(["GET", "HEAD", "PATCH"].includes(options.method));
       requests.push({ method: options.method, params });
       const values = [], predicates = [];
       const param = (value) => { values.push(value); return `$${values.length}`; };
@@ -114,6 +114,7 @@ async function database(t) {
       const where = predicates.length ? ` where ${predicates.join(" and ")}` : "";
       let sql;
       if (options.method === "PATCH") sql = `with changed as (update email_outbox set ${assignments}${where} returning *) select row_to_json(changed) as row from changed`;
+      else if (options.method === "HEAD") sql = `select count(*)::int as total from email_outbox${where}`;
       else {
         const ordering = params.get("order")?.split(",").map((part) => {
           const [name, direction] = part.split(".");
@@ -122,11 +123,12 @@ async function database(t) {
         sql = `select row_to_json(rows) as row from (select * from email_outbox${where}${ordering ? ` order by ${ordering}` : ""}${params.has("limit") ? ` limit ${param(Number(params.get("limit")))}` : ""}) rows`;
       }
       const { rows } = await db.query(sql, values);
+      if (options.method === "HEAD") return new Response(null, { status: 200, headers: { "content-range": `*/${rows[0].total}` } });
       return new Response(JSON.stringify(rows.map(({ row }) => row)), { status: 200, headers: { "content-type": "application/json" } });
     } },
   });
   return {
-    db, requests, store: () => createSupabaseOutboxStore(client()),
+    db, requests, client, store: () => createSupabaseOutboxStore(client()),
     async insert(overrides = {}) {
       const data = { inquiry_id: parent, next_attempt_at: iso(epoch), ...overrides };
       const entries = Object.entries(data);
@@ -145,6 +147,70 @@ test("outbox integration with real query builder and isolated PostgreSQL", async
   async function scenario(name, fn) {
     await t.test(name, async () => { await db.exec("delete from email_outbox"); time = epoch; await fn(); });
   }
+
+  await scenario("health reports exact status, dead-letter and currently due counts", async () => {
+    await insert();
+    await insert({ next_attempt_at: iso(epoch + 1) });
+    await insert({ status: "processing", attempts: 1, locked_until: iso(epoch - 1) });
+    await insert({ status: "processing", attempts: 1, locked_until: iso(epoch + 1) });
+    await insert({ status: "failed", attempts: 5 });
+    await insert({ status: "sent" });
+    assert.deepEqual(await inspectOutboxHealth(fixture.client(), epoch), {
+      pending: 2, processing: 2, failed: 1, sent: 1, due: 2, deadLetter: 1,
+    });
+    assert.equal(fixture.requests.filter(({ method }) => method === "HEAD").length, 5);
+    assert.equal((await inspectOutboxHealth(fixture.client(), epoch + 1)).due, 4);
+  });
+
+  await scenario("selected retry sends only due IDs through the worker and resets failed attempt budget", async () => {
+    const pending = await insert();
+    const failed = await insert({ status: "failed", attempts: 5, last_error: "Earlier failure" });
+    const outside = await insert();
+    const otherFailed = await insert({ status: "failed", attempts: 5 });
+    const leased = await insert({ status: "processing", attempts: 1, locked_until: iso(epoch + 1000) });
+    const sent = await insert({ status: "sent" });
+    const future = await insert({ next_attempt_at: iso(epoch + 1000) });
+    const mailer = createMockMailer();
+    const results = await dispatchScopedOutboxRetry({ client: fixture.client(), ids: [pending.id, failed.id, leased.id, sent.id, future.id, failed.id],
+      mailer, buildMessage: async () => message, now: () => epoch });
+    assert.deepEqual(new Set(results.map(({ id, status }) => `${id}:${status}`)), new Set([`${pending.id}:sent`, `${failed.id}:sent`]));
+    assert.equal(mailer.deliveries.length, 2);
+    assert.deepEqual(new Set(mailer.deliveries.map(({ idempotencyKey }) => idempotencyKey)), new Set([pending.event_id, failed.event_id]));
+    assert.equal((await get(failed.id)).attempts, 1);
+    assert.equal((await get(outside.id)).status, "pending");
+    assert.equal((await get(otherFailed.id)).status, "failed");
+    assert.equal((await get(leased.id)).status, "processing");
+    assert.equal((await get(sent.id)).status, "sent");
+    assert.equal((await get(future.id)).status, "pending");
+  });
+
+  await scenario("failed-only retry is bounded and concurrent attempts cannot double send", async () => {
+    const first = await insert({ status: "failed", attempts: 5, next_attempt_at: iso(epoch - 1) });
+    const second = await insert({ status: "failed", attempts: 5 });
+    const mailer = createMockMailer();
+    const config = { client: fixture.client(), mailer, buildMessage: async () => message, now: () => epoch, batchSize: 1 };
+    assert.deepEqual(await dispatchScopedOutboxRetry(config), [{ id: first.id, status: "sent" }]);
+    assert.equal((await get(second.id)).status, "failed");
+    const concurrent = await Promise.all([dispatchScopedOutboxRetry(config), dispatchScopedOutboxRetry(config)]);
+    assert.equal(concurrent.flat().filter(({ status }) => status === "sent").length, 1);
+    assert.equal(mailer.deliveries.length, 2);
+    assert.equal((await get(second.id)).attempts, 1);
+  });
+
+  await scenario("retry respects failed delivery backoff and aborts without opening records", async () => {
+    const row = await insert({ status: "failed", attempts: 5 });
+    const mailer = { send: async () => { throw new Error("delivery unavailable"); } };
+    const config = { client: fixture.client(), ids: [row.id], mailer, buildMessage: async () => message, now: () => time,
+      retry: { maxAttempts: 2 }, random: () => 0 };
+    assert.deepEqual(await dispatchScopedOutboxRetry({ ...config, signal: AbortSignal.abort() }), []);
+    assert.equal((await get(row.id)).status, "failed");
+    assert.deepEqual(await dispatchScopedOutboxRetry(config), [{ id: row.id, status: "retry" }]);
+    assert.equal((await get(row.id)).attempts, 1);
+    assert.deepEqual(await dispatchScopedOutboxRetry(config), []);
+    time = Date.parse((await get(row.id)).next_attempt_at);
+    assert.deepEqual(await dispatchScopedOutboxRetry(config), [{ id: row.id, status: "failed" }]);
+    assert.equal((await get(row.id)).attempts, 2);
+  });
 
   await scenario("due selection skips future, leased and terminal records and honors batch bounds", async () => {
     const due = await insert();
@@ -333,4 +399,32 @@ test("database errors are sanitized for listing, claiming and saving", async () 
   await assert.rejects(store.listDue(epoch, 1), safe);
   await assert.rejects(store.claim(row, epoch, 1000, 5), safe);
   await assert.rejects(store.finish({ ...row, status: "processing", locked_until: iso(epoch + 1000) }, epoch, { status: "sent", messageId: "receipt" }), safe);
+  await assert.rejects(inspectOutboxHealth(client, epoch), (error) => error.message === "Unable to inspect email outbox.");
+  await assert.rejects(dispatchScopedOutboxRetry({ client, ids: [row.id], mailer: createMockMailer(), buildMessage: async () => message, now: () => epoch }),
+    (error) => error.message === "Unable to read email outbox for retry.");
+});
+
+test("scoped retry rejects invalid selection before accessing storage", async () => {
+  const client = createClient("https://outbox-test.invalid", "test-key", {
+    auth: { persistSession: false, autoRefreshToken: false },
+    global: { fetch: async () => { assert.fail("Unexpected database access"); } },
+  });
+  const config = { client, mailer: createMockMailer(), buildMessage: async () => message };
+  await assert.rejects(dispatchScopedOutboxRetry({ ...config, ids: ["not-an-id"] }), /Invalid email outbox IDs/);
+  await assert.rejects(dispatchScopedOutboxRetry({ ...config, ids: [randomUUID(), randomUUID()], batchSize: 1 }), /exceeds batch size/);
+  assert.deepEqual(await dispatchScopedOutboxRetry({ ...config, ids: [] }), []);
+});
+
+test("retry database write errors are sanitized and never reach a transport", async () => {
+  const row = { id: randomUUID(), status: "failed", attempts: 5, next_attempt_at: iso(epoch), locked_until: null };
+  const client = createClient("https://outbox-test.invalid", "test-key", {
+    auth: { persistSession: false, autoRefreshToken: false },
+    global: { fetch: async (_url, options) => options.method === "GET"
+      ? new Response(JSON.stringify([row]), { status: 200, headers: { "content-type": "application/json" } })
+      : new Response(JSON.stringify({ message: "private database detail", code: "42501" }), { status: 403, headers: { "content-type": "application/json" } }) },
+  });
+  const mailer = createMockMailer();
+  await assert.rejects(dispatchScopedOutboxRetry({ client, ids: [row.id], mailer, buildMessage: async () => message, now: () => epoch }),
+    (error) => error.message === "Unable to requeue email outbox record.");
+  assert.equal(mailer.deliveries.length, 0);
 });

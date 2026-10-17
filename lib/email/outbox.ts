@@ -77,6 +77,88 @@ export function createSupabaseOutboxStore(client: SupabaseClient<Database>): Out
   };
 }
 
+/** Counts are queried in the database, so inspection does not download messages
+ * or depend on PostgREST's default row limit. Failed rows are dead letters until
+ * an operator explicitly retries them. `due` includes expired processing leases.
+ */
+export async function inspectOutboxHealth(client: SupabaseClient<Database>, now = Date.now()) {
+  const statuses = ["pending", "processing", "failed", "sent"] as const;
+  const counts = await Promise.all([
+    ...statuses.map((status) => client.from("email_outbox").select("id", { count: "exact", head: true }).eq("status", status)),
+    client.from("email_outbox").select("id", { count: "exact", head: true })
+      .in("status", ["pending", "processing"]).lte("next_attempt_at", iso(now))
+      .or(`locked_until.is.null,locked_until.lte.${iso(now)}`),
+  ]);
+  if (counts.some(({ error, count }) => error || count === null)) throw new Error("Unable to inspect email outbox.");
+  const [pending, processing, failed, sent, due] = counts.map(({ count }) => count!);
+  return { pending, processing, failed, sent, due, deadLetter: failed };
+}
+
+/** Retry only the specified IDs, or a bounded batch of failed rows when IDs are
+ * omitted. Failed rows are atomically reopened with a fresh attempt budget;
+ * pending rows and expired processing leases retain their existing attempts.
+ * The normal worker still owns claiming, rendering, sending and finishing.
+ */
+export async function dispatchScopedOutboxRetry(options: Omit<OutboxWorkerOptions, "store"> & {
+  client: SupabaseClient<Database>;
+  ids?: readonly string[];
+}): Promise<DispatchResult[]> {
+  const { client, ids, ...worker } = options;
+  const now = worker.now ?? Date.now;
+  const batchSize = worker.batchSize ?? 25;
+  const leaseMs = worker.leaseMs ?? 60_000;
+  const timeoutMs = worker.deliveryTimeoutMs ?? 30_000;
+  retryPolicy(worker.retry);
+  positiveInteger(batchSize, "batch size", 100);
+  positiveInteger(leaseMs, "lease duration");
+  positiveInteger(timeoutMs, "delivery timeout");
+  if (timeoutMs >= leaseMs) throw new Error("Delivery timeout must be shorter than the lease.");
+  if (ids !== undefined && (ids.length > 100 || ids.some((id) => !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)))) {
+    throw new Error("Invalid email outbox IDs.");
+  }
+  if (worker.signal?.aborted || ids?.length === 0) return [];
+
+  const selectedIds = ids === undefined ? undefined : [...new Set(ids)];
+  if (selectedIds && selectedIds.length > batchSize) throw new Error("Email outbox ID count exceeds batch size.");
+  let query = client.from("email_outbox").select("*");
+  if (selectedIds) query = query.in("id", selectedIds).in("status", ["pending", "processing", "failed"]);
+  else query = query.eq("status", "failed");
+  const { data, error } = await query.order("next_attempt_at").order("id").limit(batchSize);
+  if (error) throw new Error("Unable to read email outbox for retry.");
+  const eligibleIds: string[] = [];
+  for (const record of data ?? []) {
+    if (worker.signal?.aborted) break;
+    if (record.status !== "failed") {
+      eligibleIds.push(record.id);
+      continue;
+    }
+    if (record.locked_until !== null) continue;
+    const { data: reopened, error: updateError } = await client.from("email_outbox")
+      .update({ status: "pending", attempts: 0, next_attempt_at: iso(now()), locked_until: null, last_error: null })
+      .eq("id", record.id).eq("status", "failed").eq("attempts", record.attempts)
+      .eq("next_attempt_at", record.next_attempt_at).is("locked_until", null)
+      .select("id").maybeSingle();
+    if (updateError) throw new Error("Unable to requeue email outbox record.");
+    if (reopened) eligibleIds.push(record.id);
+  }
+  if (worker.signal?.aborted || eligibleIds.length === 0) return [];
+
+  const store = createSupabaseOutboxStore(client);
+  const scopedStore: OutboxStore = {
+    ...store,
+    async listDue(at, limit) {
+      positiveInteger(limit, "batch size", 100);
+      const { data: due, error: listError } = await client.from("email_outbox").select("*")
+        .in("id", eligibleIds).in("status", ["pending", "processing"])
+        .lte("next_attempt_at", iso(at)).or(`locked_until.is.null,locked_until.lte.${iso(at)}`)
+        .order("next_attempt_at").order("id").limit(limit);
+      if (listError) throw new Error("Unable to read email outbox for retry.");
+      return due ?? [];
+    },
+  };
+  return dispatchOutboxBatch({ ...worker, store: scopedStore });
+}
+
 /** One bounded batch for an external scheduler, or runOutboxWorker below.
  * Message rendering and transport work share a timeout shorter than the lease.
  * No work starts at module import or during a Next.js build/prerender.
