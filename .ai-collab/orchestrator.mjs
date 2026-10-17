@@ -814,6 +814,52 @@ async function taskLoop() {
     } else throw new Error(`Cannot resume phase ${checkpoint.phase}`);
   }
 }
+function recoverApprovedBriefWhitespace() {
+  acquireLock(lock, true);
+  try {
+    if (!existsSync(checkpointPath)) throw new Error('No blocked checkpoint');
+    checkpoint = JSON.parse(read(checkpointPath));
+    const c = checkpoint;
+    if (c.task?.id !== 'inquiry-assignment' || c.status !== 'BLOCKED' || c.phase !== 'APPROVED' || c.error !== 'git diff failed (2)' || c.commitTree || c.reviewReceipt?.result?.status !== 'APPROVED' || c.checks?.length !== config.checks.length || c.checks.some((check) => check.exitCode !== 0)) throw new Error('Not the reviewed brief whitespace blocker');
+    if (c.configDigest !== configDigest || digest(requiredScripts()) !== c.scriptsDigest) throw new Error('Check configuration changed');
+    if (git('diff', '--cached', '--name-only')) throw new Error('Index must be clean before brief recovery');
+    const head = git('rev-parse', 'HEAD');
+    if (git('rev-parse', 'HEAD^') !== c.baseHead) throw new Error('Expected one reviewed runner upgrade after blocked task');
+    const reviewPath = '.ai-collab/tasks/orchestrator-brief-whitespace-recovery/REVIEW.md';
+    const review = read(join(root, reviewPath));
+    const briefPath = `.ai-collab/tasks/${c.task.id}/IMPLEMENTATION_BRIEF.md`;
+    const original = read(join(root, briefPath));
+    if (field(review, 'Status') !== 'APPROVED' || field(review, 'Blocked base HEAD') !== c.baseHead || field(review, 'Original brief digest') !== digest(original)) throw new Error('Recovery review does not bind the blocked checkpoint and brief');
+    const allowedUpgrade = new Set(['.ai-collab/orchestrator-core.mjs', '.ai-collab/orchestrator.mjs', '.ai-collab/orchestrator.test.mjs', '.ai-collab/README.md', '.ai-collab/tasks/orchestrator-brief-whitespace-recovery/PLAN.md', '.ai-collab/tasks/orchestrator-brief-whitespace-recovery/IMPLEMENTATION.md', reviewPath]);
+    const committed = git('diff', '--name-only', c.baseHead, head).split('\n').filter(Boolean);
+    if (!committed.includes(reviewPath) || !committed.includes('.ai-collab/orchestrator-core.mjs') || !committed.includes('.ai-collab/orchestrator.mjs') || committed.some((path) => !allowedUpgrade.has(path))) throw new Error('Unexpected runner upgrade paths');
+    const expected = implementationBriefMarkdown({ task: c.task.id, objective: c.task.criteria, paths: c.paths, requirements: c.planReceipt?.result?.details, acceptanceCriteria: c.task.criteria });
+    if (original === expected || original.replace(/[ \t]+$/gm, '') !== expected) throw new Error('Brief differs by more than trailing whitespace');
+    const allowedDirty = new Set([...c.paths, '.ai-collab/BACKLOG.md', '.ai-collab/STATE.md', ...['PLAN.md', 'IMPLEMENTATION.md', 'REVIEW.md', 'IMPLEMENTATION_BRIEF.md', 'IMPLEMENTATION_SUMMARY.md', 'VERIFY_REPORT.md', 'REWORK.md'].map((name) => `.ai-collab/tasks/${c.task.id}/${name}`)]);
+    if (changedWorkingPaths().some((path) => !allowedDirty.has(path))) throw new Error('Unowned changes in blocked workspace');
+    const before = snapshot(root);
+    for (const path of committed) {
+      if (c.baseline[path] === undefined) delete before[path];
+      else before[path] = c.baseline[path];
+    }
+    const ignored = [...allowedDirty].filter((path) => path.startsWith('.ai-collab/'));
+    if (digest(Object.fromEntries(Object.entries(before).filter(([path]) => !ignored.includes(path)))) !== c.verifiedDigest) throw new Error('Task source differs from independently tested version');
+    atomicJSON(join(runtime, `${c.task.id}-brief-whitespace-recovery.json`), { priorError: c.error, priorBaseHead: c.baseHead, runnerUpgradeHead: head, originalBriefDigest: digest(original), reviewPath });
+    writeFileSync(join(root, briefPath), expected);
+    implementation('READY_FOR_REVIEW');
+    c.baseHead = head;
+    c.status = 'RUNNING';
+    delete c.error;
+    updateState('APPROVED');
+    const data = backlog(); setTaskRow(data, data.tasks.find((task) => task.id === c.task.id), 'APPROVED');
+    c.baseline = snapshot(root);
+    c.verifiedDigest = sourceDigest();
+    c.approvedDigest = digest(snapshot(root));
+    save();
+    event('BRIEF_WHITESPACE_RECOVERED', { runnerUpgradeHead: head });
+    writeHandoff('RECOVERED', 'Run orchestrator resume to finish the independently approved task commit.');
+  } finally { releaseLock(lock); }
+}
 async function run(resume) {
   mkdirSync(runtime, { recursive: true, mode: 0o700 });
   acquireLock(lock, resume);
@@ -912,6 +958,7 @@ try {
   else if (action === 'recover-architecture-plan') recoverArchitecturePlan();
   else if (action === 'recover-git-permission') recoverGitPermission();
   else if (action === 'recover-codex-quota') recoverCodexQuota();
+  else if (action === 'recover-brief-whitespace') recoverApprovedBriefWhitespace();
   else if (['release-status', 'release-push', 'doctor'].includes(action)) {
     const { releaseCommand } = await import('./release.mjs');
     await releaseCommand(root, action);
@@ -922,5 +969,5 @@ try {
     console.log(JSON.stringify({ checkpoint: state ? { task: state.task?.id ?? null, status: state.status, phase: state.phase, round: state.round, error: state.error, quota: state.quota ?? null, lastTokenUsage: state.lastTokenUsage ?? null } : null, handoff: existsSync(join(runtime, 'HANDOFF.md')) ? '.ai-collab/.runtime/HANDOFF.md' : null, next: select()?.id ?? null, paused: tasks.filter((task) => task.status === 'PAUSED_QUOTA').map((task) => task.id), blocked: tasks.filter((task) => task.status !== 'PAUSED_QUOTA' && hasBlocker(task)).map((task) => task.id), lock: existsSync(join(lock, 'owner.json')) ? JSON.parse(read(join(lock, 'owner.json'))) : null, receipts: existsSync(runtime) ? readdirSync(runtime).filter((name) => name.endsWith('.receipt.json')).length : 0 }, null, 2));
   }
   else if (action === 'stop') { mkdirSync(runtime, { recursive: true }); writeFileSync(stopFile, 'stop\n'); console.log('Stop requested; active child will be terminated and checkpoint preserved.'); }
-  else throw new Error('Usage: node .ai-collab/orchestrator.mjs run|resume [--quota-ready]|recover-quota|recover-plan-path|replan|recover-stopped-plan|recover-architecture|recover-architecture-plan|recover-git-permission|recover-codex-quota|status|stop|doctor|release-status|release-push');
+  else throw new Error('Usage: node .ai-collab/orchestrator.mjs run|resume [--quota-ready]|recover-quota|recover-plan-path|replan|recover-stopped-plan|recover-architecture|recover-architecture-plan|recover-git-permission|recover-codex-quota|recover-brief-whitespace|status|stop|doctor|release-status|release-push');
 } catch (error) { console.error(`Orchestrator stopped: ${error.message}`); process.exitCode = 1; }

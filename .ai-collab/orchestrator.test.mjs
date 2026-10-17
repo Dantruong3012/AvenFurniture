@@ -43,6 +43,7 @@ test('quota optimization helpers preserve concise evidence and phase telemetry',
   const report = summarizeCheckOutput('noise\nnot ok 3 - parser rejects input\nAssertionError: expected x\n    at test.mjs:12:4\nnoise\n', ['npm', 'test'], '.runtime/test.log');
   assert.deepEqual(report.failedTests, ['parser rejects input']); assert.equal(report.excerpts.length, 3); assert.equal(report.logPath, '.runtime/test.log');
   assert.match(implementationBriefMarkdown({ task: 't1', objective: 'build', paths: ['a.mjs'], requirements: 'keep scope', acceptanceCriteria: 'works' }), /Authorized files/);
+  assert.doesNotMatch(implementationBriefMarkdown({ task: 't1', objective: 'build', paths: ['a.mjs'], requirements: `${'word '.repeat(300)}`, acceptanceCriteria: 'works' }), /[\t ]+$/m);
   assert.match(implementationSummaryMarkdown({ task: 't1', paths: ['a.mjs'], summary: 'done', details: 'evidence' }), /Changed files/);
   assert.match(verifyReportMarkdown({ task: 't1', checks: [{ command: 'npm test', exitCode: 1, excerpts: ['AssertionError'], logPath: '.runtime/test.log' }] }), /Full log/);
   assert.match(reworkMarkdown({ task: 't1', round: 2, rootCause: 'bad input', correction: 'fix parser', paths: ['a.mjs'] }), /Required correction/);

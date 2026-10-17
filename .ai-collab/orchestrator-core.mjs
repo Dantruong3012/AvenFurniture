@@ -92,7 +92,7 @@ export function summarizeCheckOutput(output, command, logPath) {
   const excerpts = [...new Set(useful)].slice(0, 30);
   return { command: Array.isArray(command) ? command.join(' ') : String(command ?? ''), exitCode: 1, failedTests: [...new Set(lines.map((line) => line.match(/(?:not ok\s+\d+\s+-\s+|✖\s+)([^\r\n(]+)/)?.[1]?.trim()).filter(Boolean))], excerpts, logPath: String(logPath ?? '') };
 }
-const mdSafe = (value) => String(value ?? '').replace(/[\r\n|]/g, ' ').slice(0, 1200);
+const mdSafe = (value) => String(value ?? '').replace(/[\r\n|]/g, ' ').slice(0, 1200).trim();
 export function implementationBriefMarkdown(data) { return `# Implementation brief: ${mdSafe(data.task)}\n\n${mdSafe(data.objective)}\n\n## Authorized files\n\n${(data.paths ?? []).map((p) => `- ${mdSafe(p)}`).join('\n') || '- None'}\n\n## Requirements\n\n${mdSafe(data.requirements)}\n\n## Acceptance criteria\n\n${mdSafe(data.acceptanceCriteria)}\n`; }
 export function implementationSummaryMarkdown(data) { return `# Implementation summary: ${mdSafe(data.task)}\n\n## Changed files\n\n${(data.paths ?? []).map((p) => `- ${mdSafe(p)}`).join('\n') || '- None'}\n\n## Behavior and evidence\n\n${mdSafe(data.summary)}\n\n${mdSafe(data.details)}\n\n## Limitations / review questions\n\n${mdSafe(data.limitations ?? 'None reported')}\n`; }
 export function verifyReportMarkdown(data) { return `# Verification report: ${mdSafe(data.task)}\n\n${(data.checks ?? []).map((c) => `## ${mdSafe(c.command)} — ${c.exitCode === 0 ? 'PASS' : 'FAIL'}\n\n${c.logPath ? `Full log: ${mdSafe(c.logPath)}\n\n` : ''}${c.excerpts?.length ? c.excerpts.map((x) => `- ${mdSafe(x)}`).join('\n') : 'No failure excerpts.'}`).join('\n\n')}\n`; }
