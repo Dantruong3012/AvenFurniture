@@ -3,7 +3,7 @@
 Status: READY_FOR_REVIEW
 Changed paths: components/admin/team-management.tsx, lib/auth/actions.ts, lib/auth/admin.ts, lib/auth/validation.ts, supabase/migrations/20261017223000_staff_role_status_safeguards.sql, tests/staff-auth-policy.test.mjs, tests/database.test.mjs
 Commit: feat(staff-role-status): implement approved task
-Commit hash: -
+Commit hash: d8a410b38771c175cb28380c8dee253b3062ddf2
 
 Implemented super-admin role and active-status controls with last-super-admin protection and session revocation.
 

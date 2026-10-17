@@ -25,7 +25,7 @@ Only Antigravity adds tasks from a roadmap approved by the user. Each task also 
 | email-change-events | P1 | email-event-schema-policy,inquiry-assignment | Codex | DONE | APPROVED | Transactional event queueing for inquiry assignment and status updates with idempotency and mock delivery | 195ef51384322066e6e2b0c2cf73ae99bba942d1 |
 | staff-auth-policy | P0 | - | Antigravity | DONE | APPROVED | Approve invite, role, disable and deletion policy including Auth session handling, super_admin lockout protection and RLS | 1044a672e851e0e548690098775182b8dfd83c40 |
 | staff-invite | P1 | staff-auth-policy | Codex | DONE | APPROVED | Super admin invites staff with retry safe Auth and profile lifecycle | 5d6293228c80e821ccac4b13900fbf8f4fc7fd1d |
-| staff-role-status | P1 | staff-auth-policy | Codex | APPROVED | APPROVED | Super admin updates role and active status with last admin and session safeguards | - |
+| staff-role-status | P1 | staff-auth-policy | Codex | DONE | APPROVED | Super admin updates role and active status with last admin and session safeguards | d8a410b38771c175cb28380c8dee253b3062ddf2 |
 | staff-delete | P2 | staff-auth-policy | Codex | BACKLOG | APPROVED | Approved removal policy preserves inquiry and audit history | - |
 | newsletter-data-policy | P1 | - | Antigravity | DONE | APPROVED | Approve newsletter subscriber schema, opt-in consent, retention, tokenized unsubscribe, and RLS policy | a85851084dee568971ea324c80915c62c57c5fc5 |
 | newsletter-subscribe | P1 | newsletter-data-policy | Codex | DONE | APPROVED | Storefront newsletter subscription with email validation, rate limiting, duplicate prevention and opt-in audit | cc1f907af73aff202ddf0dbb51ec3b72b8cce4e7 |
