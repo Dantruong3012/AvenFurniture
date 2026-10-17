@@ -30,11 +30,11 @@ Only Antigravity adds tasks from a roadmap approved by the user. Each task also 
 | newsletter-data-policy | P1 | - | Antigravity | BACKLOG | NEEDS_DECISION | Approve consent, retention, unsubscribe, schema and RLS policy | - |
 | newsletter-subscribe | P1 | newsletter-data-policy | Codex | BACKLOG | NEEDS_DECISION | Persist explicit opt in with validation, rate limits and idempotency | - |
 | newsletter-unsubscribe | P1 | newsletter-subscribe | Codex | BACKLOG | NEEDS_DECISION | Signed unsubscribe revokes consent and prevents future marketing sends | - |
-| journal-content-policy | P1 | - | Antigravity | BACKLOG | NEEDS_DECISION | Approve article copy, publication source and editorial ownership | - |
-| journal-articles | P1 | journal-content-policy | Codex | BACKLOG | NEEDS_DECISION | Working listing and article detail links for approved published content | - |
-| collections-data-policy | P1 | - | Antigravity | BACKLOG | NEEDS_DECISION | Approve collection associations, schema and RLS policy | - |
-| collections-associations | P1 | collections-data-policy | Codex | BACKLOG | NEEDS_DECISION | Store and validate collection to product associations without Production migration | - |
-| collections-filter | P1 | collections-associations | Codex | BACKLOG | NEEDS_DECISION | Collection routes show only associated published products with filter and empty states | - |
+| journal-content-policy | P1 | - | Antigravity | READY | APPROVED | Approve article copy, publication source, editorial ownership, static Markdown schema, SEO and Zalo CTA | - |
+| journal-articles | P1 | journal-content-policy | Codex | BACKLOG | APPROVED | Working listing, article detail pages, static Markdown rendering, SEO metadata and Zalo CTA | - |
+| collections-data-policy | P1 | - | Antigravity | READY | APPROVED | Approve collection catalog taxonomy, association policy and filter schema without database migrations | - |
+| collections-associations | P1 | collections-data-policy | Codex | BACKLOG | APPROVED | Store and validate collection to product associations without Production migration | - |
+| collections-filter | P1 | collections-associations | Codex | BACKLOG | APPROVED | Collection routes show only associated published products with filter and empty states | - |
 | email-delivery-policy | P1 | - | Antigravity | BACKLOG | NEEDS_DECISION | Choose provider, sender domain and scheduled dispatch infrastructure | - |
 | email-provider-adapter | P1 | email-delivery-policy | Codex | BACKLOG | NEEDS_DECISION | Production mail adapter preserves outbox retries and secret isolation | - |
 | outbox-scheduler | P1 | email-delivery-policy,email-outbox-dispatch | Codex | BACKLOG | NEEDS_DECISION | Authenticated scheduled dispatch safely claims pending outbox jobs | - |

@@ -3,7 +3,7 @@
 Active task: -
 Current phase: IDLE
 Last completed task: outbox-admin-health
-Next task: -
+Next task: journal-content-policy
 Blockers: -
 Last successful commit: 0273768b8ce18a845f8738bb396d15e79af094e1
 

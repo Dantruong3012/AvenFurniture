@@ -57,7 +57,7 @@ function hasBlocker(task) {
   });
 }
 function nextTask(tasks) {
-  return tasks.filter((task) => task.scopeApproval === 'APPROVED' && task.status === 'READY' && !hasBlocker(task) && task.dependencies.every((dep) => tasks.some((candidate) => candidate.id === dep && candidate.status === 'DONE' && !hasBlocker(candidate))))
+  return tasks.filter((task) => task.scopeApproval === 'APPROVED' && ['READY', 'BACKLOG'].includes(task.status) && !hasBlocker(task) && task.dependencies.every((dep) => tasks.some((candidate) => candidate.id === dep && candidate.status === 'DONE' && !hasBlocker(candidate))))
     .sort((a, b) => a.priority.localeCompare(b.priority) || a.lineNumber - b.lineNumber)[0] ?? null;
 }
 function setTaskRow(data, task, status, hash = task.hash) {
