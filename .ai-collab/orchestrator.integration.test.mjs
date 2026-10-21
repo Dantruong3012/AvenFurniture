@@ -38,6 +38,14 @@ if(agy&&phase==='plan'&&mode==='architecture-block') {
   if(recovering&&existsSync('.ai-collab/.runtime/wrong-architecture-paths'))result.paths=['unexpected.txt'];
 }
 if(agy&&phase==='plan'&&mode==='unsafe-plan-artifact')result.paths.push('.ai-collab/tasks/'+id+'/IMPLEMENTATION.md');
+if(agy&&phase==='plan'&&mode==='specification-block'&&!existsSync('.ai-collab/.runtime/specification-recovered')){
+  result.status='BLOCKED';
+  result.code='MISSING_SPECIFICATION';
+  result.summary='Task t1 is blocked due to ambiguous guest identity/session synchronization architecture across devices without authentication or backend session storage specification.';
+  result.details='Missing specification for guest identity and sync.';
+  result.paths=[];
+  result.requestedPaths=[];
+}
 if(agy&&phase==='plan'&&mode==='replan-block'&&prompt.includes('Revised fixture ownership')){
   if(!prompt.includes('app/cart/page.tsx')||!prompt.includes('Existing tracked application and test paths'))process.exit(7);
   result.paths=existsSync('.ai-collab/.runtime/wrong-replan-paths')?['src/cart/page.tsx']:['t1.txt','app/cart/page.tsx','components/forms/contact-form.tsx'];
@@ -845,5 +853,70 @@ for (const reason of ['wrong-statuses', 'wrong-paths', 'unapproved-review', 'wro
     assert.equal(readFileSync(path, 'utf8'), before);
     assert.equal(readFileSync(implementationPath, 'utf8'), blocker);
     assert.ok(!existsSync(join(dir, `.ai-collab/.runtime/t1-${checkpoint(dir).sequence}-architecture-planning-blocker.md`)));
+  } finally { rmSync(dir, { recursive: true }); }
+});
+
+async function blockedSpecificationFixture(reason = 'valid') {
+  const dir = fixture('specification-block');
+  const failed = await run(dir);
+  assert.equal(failed.code, 1, failed.output);
+  assert.equal(checkpoint(dir).status, 'BLOCKED');
+  const saved = checkpoint(dir);
+  const taskPlan = join(dir, '.ai-collab/tasks/t1/PLAN.md');
+  const planText = `# Plan: t1\n\nStatus: ${reason === 'unapproved-plan' ? 'CHANGES_REQUESTED' : 'APPROVED'}\n\nGuest quote-request cart uses localStorage for guests without requiring login. Authenticated customer accounts can sync quote-request cart across devices. When logging in, merge local cart with server cart without fingerprint or IP tracking, without guest share token, and without checkout or payment.\n\nOwned paths: t1.txt\n`;
+  writeFileSync(taskPlan, planText);
+  const repairPlan = join(dir, '.ai-collab/tasks/orchestrator-specification-recovery/PLAN.md');
+  mkdirSync(dirname(repairPlan), { recursive: true });
+  writeFileSync(repairPlan, '# Plan: orchestrator-specification-recovery\n\nStatus: APPROVED\nPlanner: Antigravity\n');
+  const review = join(dir, '.ai-collab/tasks/orchestrator-specification-recovery/REVIEW.md');
+  const hash = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  writeFileSync(review, `# Review: orchestrator-specification-recovery\n\nStatus: ${reason === 'unapproved-review' ? 'CHANGES_REQUESTED' : 'APPROVED'}\nReviewer: Antigravity\nReviewed task: ${reason === 'wrong-task' ? 'unrelated' : 't1'}\nReviewed runner base: ${saved.baseHead}\nApproved task plan digest: ${reason === 'wrong-plan-digest' ? '0'.repeat(64) : hash(planText)}\n`);
+  const runner = join(dir, '.ai-collab/orchestrator.mjs');
+  writeFileSync(runner, readFileSync(runner, 'utf8') + '\n// reviewed specification recovery fixture\n');
+  if (reason === 'extra-history') { writeFileSync(join(dir, 'unrelated.md'), 'extra commit\n'); gitCall(dir, 'add', 'unrelated.md'); gitCall(dir, 'commit', '-qm', 'unreviewed history'); }
+  gitCall(dir, 'add', '.ai-collab/orchestrator.mjs', '.ai-collab/tasks/orchestrator-specification-recovery/PLAN.md', '.ai-collab/tasks/orchestrator-specification-recovery/REVIEW.md');
+  gitCall(dir, 'commit', '-qm', 'fix(orchestrator): recover blocked specification planning checkpoint');
+  if (reason === 'missing-plan') rmSync(taskPlan);
+  if (reason === 'missing-receipt') rmSync(join(dir, `.ai-collab/.runtime/t1-${saved.sequence}-plan.receipt.json`));
+  if (reason === 'dirty-source') writeFileSync(join(dir, 'unowned.txt'), 'dirty\n');
+  if (reason === 'staged') { writeFileSync(join(dir, 'unowned.txt'), 'staged\n'); gitCall(dir, 'add', 'unowned.txt'); }
+  return dir;
+}
+
+test('reviewed specification recovery adopts approved plan, archives blocker, and transitions to READY', async () => {
+  const dir = await blockedSpecificationFixture();
+  try {
+    const before = checkpoint(dir);
+    const receiptPath = join(dir, `.ai-collab/.runtime/t1-${before.sequence}-plan.receipt.json`);
+    const receiptText = readFileSync(receiptPath, 'utf8');
+    const blocker = readFileSync(join(dir, '.ai-collab/tasks/t1/IMPLEMENTATION.md'), 'utf8');
+    const recovered = await run(dir, 'recover-specification');
+    assert.equal(recovered.code, 0, recovered.output);
+    const ready = checkpoint(dir);
+    assert.equal(ready.status, 'RUNNING');
+    assert.equal(ready.phase, 'READY');
+    assert.deepEqual(ready.paths, ['t1.txt']);
+    assert.equal(ready.planReceipt.sequence, before.sequence + 1);
+    assert.equal(readFileSync(receiptPath, 'utf8'), receiptText);
+    assert.equal(readFileSync(join(dir, `.ai-collab/.runtime/t1-${before.sequence}-missing-specification-blocker.md`), 'utf8'), blocker);
+    assert.equal((await run(dir, 'recover-specification')).code, 1);
+    const finished = await run(dir, 'resume');
+    assert.equal(finished.code, 0, finished.output);
+    assert.deepEqual(events(dir).filter(entry => entry.phase === 'DONE').map(entry => entry.task), ['t1']);
+  } finally { rmSync(dir, { recursive: true }); }
+});
+
+for (const reason of ['missing-plan', 'unapproved-plan', 'unapproved-review', 'wrong-plan-digest', 'extra-history', 'missing-receipt', 'dirty-source', 'staged']) test(`specification recovery rejects ${reason} and preserves checkpoint`, async () => {
+  const dir = await blockedSpecificationFixture(reason);
+  try {
+    const path = join(dir, '.ai-collab/.runtime/checkpoint.json');
+    const before = readFileSync(path, 'utf8');
+    const implementationPath = join(dir, '.ai-collab/tasks/t1/IMPLEMENTATION.md');
+    const blocker = readFileSync(implementationPath, 'utf8');
+    const result = await run(dir, 'recover-specification');
+    assert.equal(result.code, 1, result.output);
+    assert.equal(readFileSync(path, 'utf8'), before);
+    assert.equal(readFileSync(implementationPath, 'utf8'), blocker);
+    assert.ok(!existsSync(join(dir, `.ai-collab/.runtime/t1-${checkpoint(dir).sequence}-missing-specification-blocker.md`)));
   } finally { rmSync(dir, { recursive: true }); }
 });
