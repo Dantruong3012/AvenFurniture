@@ -1,7 +1,7 @@
 # Workflow state
 
-Active task: -
-Current phase: IDLE
+Active task: wishlist-sync
+Current phase: APPROVED
 Last completed task: cart-sync
 Next task: wishlist-sync
 Blockers: -
