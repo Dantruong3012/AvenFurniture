@@ -40,7 +40,7 @@ Only Antigravity adds tasks from a roadmap approved by the user. Each task also 
 | outbox-scheduler | P1 | email-delivery-policy,email-outbox-dispatch | Codex | BACKLOG | NEEDS_DECISION | Authenticated scheduled dispatch safely claims pending outbox jobs | - |
 <!-- commerce-architecture, order-checkout, payment-integration removed 2026-10-17: AvenFurniture has no online payments. Primary product CTA is Zalo direct contact (storefront-consultant-zalo, DONE). -->
 | customer-identity-policy | P1 | - | Antigravity | DONE | APPROVED | Approve customer identity, privacy, conflict and Auth or RLS model (inquiry/wishlist only, no checkout) | 2ca46620f4a6ff78eb6e18b41afcd2c0b20496f6 |
-| cart-sync | P2 | customer-identity-policy | Codex | BACKLOG | APPROVED | Guest quote-request cart synchronization across devices (no payment, inquiry model only) | - |
+| cart-sync | P2 | customer-identity-policy | Codex | APPROVED | APPROVED | Guest quote-request cart synchronization across devices (no payment, inquiry model only) | - |
 | wishlist-sync | P2 | customer-identity-policy | Codex | BACKLOG | APPROVED | Authenticated wishlist synchronizes across devices with guest migration | - |
 | release-pipeline-policy | P1 | - | Antigravity | BACKLOG | NEEDS_DECISION | Approve PR creation, CI contracts, controlled merge and deployment tracking activation | - |
 | release-pr-ci | P1 | release-pipeline-policy | Codex | BACKLOG | NEEDS_DECISION | Reconcile dev PR and required CI without automatic merge | - |

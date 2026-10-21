@@ -31,6 +31,14 @@ export interface CartItem {
   quantity: number;
 }
 
+export type CustomerCartItem = CartItem & {
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CartSyncRequest = { items: CartItem[] };
+export type CartSyncResult = { items: CartItem[]; synchronized: true };
+
 export type StorefrontInquirySource = "cart" | "product" | "contact";
 
 export type InquiryConfirmation = {

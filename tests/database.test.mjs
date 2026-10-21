@@ -73,10 +73,23 @@ test("MVP migration and RLS on isolated PostgreSQL", async (t) => {
   const rejects = (sql, params = [], code = "42501") => assert.rejects(db.query(sql, params), (error) =>
     code === "23503" ? ["23503", "23001"].includes(error.code) : error.code === code);
 
-  await t.test("all fifteen public tables have RLS enabled", async () => {
+  await t.test("all sixteen public tables have RLS enabled", async () => {
     const { rows } = await db.query("select relname, relrowsecurity from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r'");
-    assert.equal(rows.length, 15);
+    assert.equal(rows.length, 16);
     assert.ok(rows.every((row) => row.relrowsecurity));
+  });
+  await t.test("customer quote carts are private, published-only and session-bound", async () => {
+    await as("anon", null, () => rejects("select * from public.customer_cart_items"));
+    await as("authenticated", ids.outsider, async () => {
+      await db.query("insert into public.customer_cart_items(user_id,product_id,quantity) values ($1,$2,2)", [ids.outsider, published]);
+      assert.deepEqual((await db.query("select product_id,quantity from public.customer_cart_items")).rows, [{ product_id: published, quantity: 2 }]);
+      assert.equal((await db.query("update public.customer_cart_items set quantity=999 returning quantity")).rows[0].quantity, 999);
+      await rejects("insert into public.customer_cart_items(user_id,product_id,quantity) values ($1,$2,1)", [ids.admin, published]);
+      await rejects("insert into public.customer_cart_items(user_id,product_id,quantity) values ($1,$2,1)", [ids.outsider, draft]);
+      await rejects("update public.customer_cart_items set user_id=$1 returning user_id", [ids.admin]);
+    });
+    await as("authenticated", ids.admin, async () => assert.equal((await db.query("select * from public.customer_cart_items")).rows.length, 0));
+    await as("authenticated", ids.outsider, async () => assert.equal((await db.query("select * from public.customer_cart_items")).rows.length, 0), sessionIds.admin);
   });
   await t.test("newsletter roster requires a current staff session", async () => {
     await as("service_role", null, () => db.query(

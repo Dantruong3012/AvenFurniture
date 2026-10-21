@@ -1,7 +1,7 @@
 # Workflow state
 
-Active task: -
-Current phase: IDLE
+Active task: cart-sync
+Current phase: APPROVED
 Last completed task: staff-delete
 Next task: cart-sync
 Blockers: -
