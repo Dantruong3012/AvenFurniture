@@ -14,10 +14,14 @@ function fixture(mode = 'success', second = false) {
   for (const name of ['workflow.mjs', 'orchestrator.mjs', 'orchestrator-core.mjs', 'release.mjs', 'release-git.mjs', 'release.config.json', '.gitignore']) copyFileSync(join(source, name), join(collab, name));
   const fixtureReleasePath = join(collab, 'release.config.json');
   writeFileSync(fixtureReleasePath, JSON.stringify({ ...JSON.parse(readFileSync(fixtureReleasePath, 'utf8')), enabled: false, developmentPushEnabled: false }));
+  if (mode === 'git-diff-block') {
+    const wf = join(collab, 'workflow.mjs');
+    writeFileSync(wf, readFileSync(wf, 'utf8').replace("['-c', 'core.whitespace=-blank-at-eof', 'diff', '--cached', '--check']", "['diff', '--cached', '--check']"));
+  }
   writeFileSync(join(dir, 'AGENTS.md'), 'Isolated deterministic coordinator test.');
   writeFileSync(join(dir, 'scenario.json'), JSON.stringify({ mode }));
   if (mode === 'architecture-block') writeFileSync(join(dir, 'package.json'), JSON.stringify({ scripts: { lint: 'eslint', test: 'node --test' } }));
-  writeFileSync(join(dir, 'verify.mjs'), `import {readFileSync,readdirSync} from 'node:fs'; import assert from 'node:assert/strict'; const files=readdirSync('.').filter(p=>/^t[12]\\.txt$/.test(p)); assert.ok(files.length); for(const f of files)assert.equal(readFileSync(f,'utf8'),'verified'); if(JSON.parse(readFileSync('scenario.json')).mode==='fail-check') process.exit(2);`);
+  writeFileSync(join(dir, 'verify.mjs'), `import {readFileSync,readdirSync} from 'node:fs'; import assert from 'node:assert/strict'; const files=readdirSync('.').filter(p=>/^t[12]\\.txt$/.test(p)); assert.ok(files.length); for(const f of files)assert.equal(readFileSync(f,'utf8').trim(),'verified'); if(JSON.parse(readFileSync('scenario.json')).mode==='fail-check') process.exit(2);`);
   writeFileSync(join(dir, 'fake.mjs'), `import {readFileSync,writeFileSync,existsSync} from 'node:fs';
 import {dirname} from 'node:path'; import {fileURLToPath} from 'node:url';
 const invocationCwd=process.cwd();
@@ -74,7 +78,7 @@ if(phase==='implement') {
     result.code='ALLOWLIST_EXCLUDED';result.requestedPaths=['extra.txt'];
   } else {
   if(mode==='stop-resume'&&!existsSync('.ai-collab/.runtime/delayed')){writeFileSync('.ai-collab/.runtime/delayed','yes');await new Promise(r=>setTimeout(r,2500));}
-  writeFileSync(id+'.txt','verified'); result.status='READY_FOR_REVIEW';
+  writeFileSync(id+'.txt', mode==='git-diff-block'?'verified\\n\\n':'verified'); result.status='READY_FOR_REVIEW';
   }
 }
 if(agy && (((mode==='quota-plan'&&phase==='plan')||(mode==='quota-review'&&phase==='review')) && !existsSync('.ai-collab/.runtime/quota-seen') || (mode==='quota-always'&&phase==='plan'))) {
@@ -918,5 +922,65 @@ for (const reason of ['missing-plan', 'unapproved-plan', 'unapproved-review', 'w
     assert.equal(readFileSync(path, 'utf8'), before);
     assert.equal(readFileSync(implementationPath, 'utf8'), blocker);
     assert.ok(!existsSync(join(dir, `.ai-collab/.runtime/t1-${checkpoint(dir).sequence}-missing-specification-blocker.md`)));
+  } finally { rmSync(dir, { recursive: true }); }
+});
+
+async function blockedGitDiffFixture(reason = 'valid') {
+  const dir = fixture('git-diff-block');
+  const failed = await run(dir);
+  assert.equal(failed.code, 1, failed.output);
+  assert.equal(checkpoint(dir).status, 'BLOCKED');
+  assert.equal(checkpoint(dir).phase, 'APPROVED');
+  assert.ok(checkpoint(dir).error.includes('git diff failed (2)'));
+  const saved = checkpoint(dir);
+  gitCall(dir, 'restore', '--staged', '.');
+  const upgradedWf = join(dir, '.ai-collab/workflow.mjs');
+  writeFileSync(upgradedWf, readFileSync(join(source, 'workflow.mjs'), 'utf8'));
+  const repairPlan = join(dir, '.ai-collab/tasks/orchestrator-git-diff-recovery/PLAN.md');
+  mkdirSync(dirname(repairPlan), { recursive: true });
+  writeFileSync(repairPlan, '# Plan: orchestrator-git-diff-recovery\n\nStatus: APPROVED\nPlanner: Antigravity\n');
+  const review = join(dir, '.ai-collab/tasks/orchestrator-git-diff-recovery/REVIEW.md');
+  writeFileSync(review, `# Review: orchestrator-git-diff-recovery\n\nStatus: ${reason === 'unapproved-review' ? 'CHANGES_REQUESTED' : 'APPROVED'}\nReviewer: Antigravity\nBlocked base HEAD: ${reason === 'wrong-base' ? '0'.repeat(40) : saved.baseHead}\nBlocked task: ${reason === 'wrong-task' ? 'unrelated' : 't1'}\n`);
+  const runner = join(dir, '.ai-collab/orchestrator.mjs');
+  writeFileSync(runner, readFileSync(runner, 'utf8') + '\n// reviewed git diff recovery fixture\n');
+  if (reason === 'extra-history') { writeFileSync(join(dir, 'unrelated.md'), 'extra commit\n'); gitCall(dir, 'add', 'unrelated.md'); gitCall(dir, 'commit', '-qm', 'unreviewed history'); }
+  gitCall(dir, 'add', '.ai-collab/workflow.mjs', '.ai-collab/orchestrator.mjs', '.ai-collab/tasks/orchestrator-git-diff-recovery/PLAN.md', '.ai-collab/tasks/orchestrator-git-diff-recovery/REVIEW.md');
+  gitCall(dir, 'commit', '-qm', 'fix(orchestrator): recover approved task git diff whitespace check failure');
+  if (reason === 'dirty-source') writeFileSync(join(dir, 'unowned.txt'), 'dirty\n');
+  if (reason === 'staged') { writeFileSync(join(dir, 'unowned.txt'), 'staged\n'); gitCall(dir, 'add', 'unowned.txt'); }
+  return dir;
+}
+
+test('reviewed git diff whitespace recovery adopts verified digest, archives blocker, and resumes commit', async () => {
+  const dir = await blockedGitDiffFixture();
+  try {
+    const before = checkpoint(dir);
+    const blocker = readFileSync(join(dir, '.ai-collab/tasks/t1/IMPLEMENTATION.md'), 'utf8');
+    const recovered = await run(dir, 'recover-git-diff');
+    assert.equal(recovered.code, 0, recovered.output);
+    const ready = checkpoint(dir);
+    assert.equal(ready.status, 'RUNNING');
+    assert.equal(ready.phase, 'APPROVED');
+    assert.equal(ready.baseHead, gitCall(dir, 'rev-parse', 'HEAD'));
+    assert.equal(readFileSync(join(dir, `.ai-collab/.runtime/t1-${before.sequence}-git-diff-blocker.md`), 'utf8'), blocker);
+    assert.equal((await run(dir, 'recover-git-diff')).code, 1);
+    const finished = await run(dir, 'resume');
+    assert.equal(finished.code, 0, finished.output);
+    assert.deepEqual(events(dir).filter(entry => entry.phase === 'DONE').map(entry => entry.task), ['t1']);
+  } finally { rmSync(dir, { recursive: true }); }
+});
+
+for (const reason of ['unapproved-review', 'wrong-task', 'wrong-base', 'extra-history', 'dirty-source', 'staged']) test(`git diff recovery rejects ${reason} and preserves checkpoint`, async () => {
+  const dir = await blockedGitDiffFixture(reason);
+  try {
+    const path = join(dir, '.ai-collab/.runtime/checkpoint.json');
+    const before = readFileSync(path, 'utf8');
+    const implementationPath = join(dir, '.ai-collab/tasks/t1/IMPLEMENTATION.md');
+    const blocker = readFileSync(implementationPath, 'utf8');
+    const result = await run(dir, 'recover-git-diff');
+    assert.equal(result.code, 1, result.output);
+    assert.equal(readFileSync(path, 'utf8'), before);
+    assert.equal(readFileSync(implementationPath, 'utf8'), blocker);
+    assert.ok(!existsSync(join(dir, `.ai-collab/.runtime/t1-${checkpoint(dir).sequence}-git-diff-blocker.md`)));
   } finally { rmSync(dir, { recursive: true }); }
 });

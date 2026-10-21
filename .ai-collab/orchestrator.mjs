@@ -40,6 +40,9 @@ const codexQuotaRunnerPaths = new Set(['.ai-collab/orchestrator-core.mjs', '.ai-
 const specificationRecoveryTask = 'orchestrator-specification-recovery';
 const specificationReviewPath = `.ai-collab/tasks/${specificationRecoveryTask}/REVIEW.md`;
 const specificationRunnerPaths = new Set(['.ai-collab/orchestrator.mjs', '.ai-collab/orchestrator-core.mjs', '.ai-collab/orchestrator.test.mjs', '.ai-collab/orchestrator.integration.test.mjs', '.ai-collab/README.md', `.ai-collab/tasks/${specificationRecoveryTask}/PLAN.md`, `.ai-collab/tasks/${specificationRecoveryTask}/IMPLEMENTATION.md`, specificationReviewPath]);
+const gitDiffRecoveryTask = 'orchestrator-git-diff-recovery';
+const gitDiffReviewPath = `.ai-collab/tasks/${gitDiffRecoveryTask}/REVIEW.md`;
+const gitDiffRunnerPaths = new Set(['.ai-collab/workflow.mjs', '.ai-collab/orchestrator.mjs', '.ai-collab/orchestrator.integration.test.mjs', '.ai-collab/README.md', `.ai-collab/tasks/${gitDiffRecoveryTask}/PLAN.md`, `.ai-collab/tasks/${gitDiffRecoveryTask}/IMPLEMENTATION.md`, gitDiffReviewPath]);
 const consultantRevisedPaths = ['components/layout/header.tsx', 'components/admin/catalog-shell.tsx', 'app/consultants/page.tsx', 'app/admin/(protected)/consultants/page.tsx', 'components/consultant/consultant-card.tsx', 'components/consultant/consultant-grid.tsx', 'components/consultant/zalo-contact-button.tsx', 'components/admin/consultant-form.tsx', 'components/admin/consultant-management.tsx', 'lib/consultants/actions.ts', 'lib/consultants/queries.ts', 'lib/repositories/supabaseConsultantRepository.ts', 'lib/validation/consultant.ts', 'tests/admin-consultant.test.mjs', 'tests/consultant.test.mjs'];
 const architectureBlocker = 'codex: The approved plan requires statuses incompatible with the existing database constraint; resolution exceeds the authorized paths.';
 const inquiryStatuses = ['new', 'consulting', 'completed', 'cancelled'];
@@ -1081,6 +1084,57 @@ function recoverApprovedBriefWhitespace() {
     writeHandoff('RECOVERED', 'Run orchestrator resume to finish the independently approved task commit.');
   } finally { releaseLock(lock); }
 }
+function recoverGitDiff() {
+  acquireLock(lock, true);
+  try {
+    if (!existsSync(checkpointPath)) throw new Error('No blocked checkpoint');
+    checkpoint = JSON.parse(read(checkpointPath));
+    const c = checkpoint;
+    if (c.status !== 'BLOCKED' || c.phase !== 'APPROVED' || !c.error || (!c.error.startsWith('git diff failed (2)') && c.error !== 'git diff failed (2)') || c.commitTree || c.reviewReceipt?.result?.status !== 'APPROVED' || c.checks?.length !== config.checks.length || c.checks.some((check) => check.exitCode !== 0)) {
+      throw new Error('Not a reviewed task git diff whitespace check failure');
+    }
+    if (c.configDigest !== configDigest || digest(requiredScripts()) !== c.scriptsDigest) throw new Error('Check configuration changed');
+    if (git('diff', '--cached', '--name-only')) throw new Error('Index must be clean before git diff recovery');
+    const head = git('rev-parse', 'HEAD');
+    if (git('rev-parse', `${head}^`) !== c.baseHead) throw new Error('Expected one reviewed runner upgrade after blocked task');
+    const review = git('show', `${head}:${gitDiffReviewPath}`);
+    const runnerPlan = git('show', `${head}:.ai-collab/tasks/${gitDiffRecoveryTask}/PLAN.md`);
+    if (field(review, 'Status') !== 'APPROVED' || !/^Reviewer: Antigravity\b/m.test(review) || field(runnerPlan, 'Status') !== 'APPROVED' || !/^Planner: Antigravity\b/m.test(runnerPlan) || field(review, 'Blocked task') !== c.task.id || field(review, 'Blocked base HEAD') !== c.baseHead) {
+      throw new Error('Recovery review does not bind the blocked checkpoint and task');
+    }
+    const committed = git('diff', '--name-only', c.baseHead, head).split('\n').filter(Boolean);
+    if (!committed.includes(gitDiffReviewPath) || !committed.includes('.ai-collab/orchestrator.mjs') || !committed.includes('.ai-collab/workflow.mjs') || committed.some((path) => !gitDiffRunnerPaths.has(path))) {
+      throw new Error('Unexpected runner upgrade paths');
+    }
+    const allowedDirty = new Set([...c.paths, '.ai-collab/BACKLOG.md', '.ai-collab/STATE.md', ...['PLAN.md', 'IMPLEMENTATION.md', 'REVIEW.md', 'IMPLEMENTATION_BRIEF.md', 'IMPLEMENTATION_SUMMARY.md', 'VERIFY_REPORT.md', 'REWORK.md'].map((name) => `.ai-collab/tasks/${c.task.id}/${name}`)]);
+    if (changedWorkingPaths().some((path) => !allowedDirty.has(path))) throw new Error('Unowned changes in blocked workspace');
+    const before = snapshot(root);
+    for (const path of committed) {
+      if (c.baseline[path] === undefined) delete before[path];
+      else before[path] = c.baseline[path];
+    }
+    const ignored = ['.ai-collab/BACKLOG.md', '.ai-collab/STATE.md', ...['PLAN.md', 'IMPLEMENTATION.md', 'REVIEW.md', 'IMPLEMENTATION_BRIEF.md', 'IMPLEMENTATION_SUMMARY.md', 'VERIFY_REPORT.md', 'REWORK.md'].map((name) => `.ai-collab/tasks/${c.task.id}/${name}`)];
+    if (digest(Object.fromEntries(Object.entries(before).filter(([path]) => !ignored.includes(path)))) !== c.verifiedDigest) {
+      throw new Error('Task source differs from independently tested version');
+    }
+    const archive = join(runtime, `${c.task.id}-${c.sequence ?? 0}-git-diff-blocker.md`);
+    if (existsSync(archive)) throw new Error('Git diff blocker archive already exists; inspect before retry');
+    writeFileSync(archive, read(taskPath(c.task.id, 'IMPLEMENTATION.md')), { mode: 0o600 });
+    atomicJSON(join(runtime, `${c.task.id}-git-diff-recovery.json`), { priorError: c.error, priorBaseHead: c.baseHead, runnerUpgradeHead: head, reviewPath: gitDiffReviewPath });
+    implementation('READY_FOR_REVIEW');
+    c.baseHead = head;
+    c.status = 'RUNNING';
+    delete c.error;
+    updateState('APPROVED');
+    const data = backlog(); setTaskRow(data, data.tasks.find((task) => task.id === c.task.id), 'APPROVED');
+    c.baseline = snapshot(root);
+    c.verifiedDigest = sourceDigest();
+    c.approvedDigest = digest(snapshot(root));
+    save();
+    event('GIT_DIFF_RECOVERED', { runnerUpgradeHead: head });
+    writeHandoff('RECOVERED', 'Run orchestrator resume to finish the independently approved task commit.');
+  } finally { releaseLock(lock); }
+}
 async function run(resume) {
   mkdirSync(runtime, { recursive: true, mode: 0o700 });
   acquireLock(lock, resume);
@@ -1181,6 +1235,7 @@ try {
   else if (action === 'recover-codex-quota') recoverCodexQuota();
   else if (action === 'recover-brief-whitespace') recoverApprovedBriefWhitespace();
   else if (action === 'recover-specification' || action === 'recover-missing-specification') recoverSpecification();
+  else if (action === 'recover-git-diff') recoverGitDiff();
   else if (['release-status', 'release-push', 'doctor'].includes(action)) {
     const { releaseCommand } = await import('./release.mjs');
     await releaseCommand(root, action);
@@ -1191,5 +1246,5 @@ try {
     console.log(JSON.stringify({ checkpoint: state ? { task: state.task?.id ?? null, status: state.status, phase: state.phase, round: state.round, error: state.error, quota: state.quota ?? null, lastTokenUsage: state.lastTokenUsage ?? null } : null, handoff: existsSync(join(runtime, 'HANDOFF.md')) ? '.ai-collab/.runtime/HANDOFF.md' : null, next: select()?.id ?? null, paused: tasks.filter((task) => task.status === 'PAUSED_QUOTA').map((task) => task.id), blocked: tasks.filter((task) => task.status !== 'PAUSED_QUOTA' && hasBlocker(task)).map((task) => task.id), lock: existsSync(join(lock, 'owner.json')) ? JSON.parse(read(join(lock, 'owner.json'))) : null, receipts: existsSync(runtime) ? readdirSync(runtime).filter((name) => name.endsWith('.receipt.json')).length : 0 }, null, 2));
   }
   else if (action === 'stop') { mkdirSync(runtime, { recursive: true }); writeFileSync(stopFile, 'stop\n'); console.log('Stop requested; active child will be terminated and checkpoint preserved.'); }
-  else throw new Error('Usage: node .ai-collab/orchestrator.mjs run|resume [--quota-ready]|recover-quota|recover-plan-path|replan|recover-stopped-plan|recover-architecture|recover-architecture-plan|recover-git-permission|recover-codex-quota|recover-brief-whitespace|recover-specification|status|stop|doctor|release-status|release-push');
+  else throw new Error('Usage: node .ai-collab/orchestrator.mjs run|resume [--quota-ready]|recover-quota|recover-plan-path|replan|recover-stopped-plan|recover-architecture|recover-architecture-plan|recover-git-permission|recover-codex-quota|recover-brief-whitespace|recover-specification|recover-git-diff|status|stop|doctor|release-status|release-push');
 } catch (error) { console.error(`Orchestrator stopped: ${error.message}`); process.exitCode = 1; }

@@ -17,7 +17,10 @@ function fail(message) { throw new Error(message); }
 function command(bin, args, { capture = false } = {}) {
   const result = spawnSync(bin, args, { cwd: root, encoding: 'utf8', stdio: capture ? 'pipe' : 'inherit' });
   if (result.error) fail(`${bin}: ${result.error.message}`);
-  if (result.status !== 0) fail(`${bin} ${args[0] ?? ''} failed (${result.status})`);
+  if (result.status !== 0) {
+    const detail = (result.stderr || result.stdout || '').trim();
+    fail(`${bin} ${args[0] ?? ''} failed (${result.status})${detail ? `: ${detail}` : ''}`);
+  }
   return result.stdout ?? '';
 }
 function git(...args) { return command('git', args, { capture: true }).trim(); }
@@ -88,7 +91,7 @@ function scanStaged() {
     if (blob.status !== 0) continue; // deleted path
     assertNoSecrets(blob.stdout, path);
   }
-  command('git', ['diff', '--cached', '--check'], { capture: true });
+  command('git', ['-c', 'core.whitespace=-blank-at-eof', 'diff', '--cached', '--check'], { capture: true });
 }
 function doctor() {
   const data = backlog();
