@@ -41,7 +41,7 @@ Only Antigravity adds tasks from a roadmap approved by the user. Each task also 
 <!-- commerce-architecture, order-checkout, payment-integration removed 2026-10-17: AvenFurniture has no online payments. Primary product CTA is Zalo direct contact (storefront-consultant-zalo, DONE). -->
 | customer-identity-policy | P1 | - | Antigravity | DONE | APPROVED | Approve customer identity, privacy, conflict and Auth or RLS model (inquiry/wishlist only, no checkout) | 2ca46620f4a6ff78eb6e18b41afcd2c0b20496f6 |
 | cart-sync | P2 | customer-identity-policy | Codex | DONE | APPROVED | Guest quote-request cart synchronization across devices (no payment, inquiry model only) | c16042924ea9a6209adc783cc988efad2f393472 |
-| wishlist-sync | P2 | customer-identity-policy | Codex | APPROVED | APPROVED | Authenticated wishlist synchronizes across devices with guest migration | - |
+| wishlist-sync | P2 | customer-identity-policy | Codex | DONE | APPROVED | Authenticated wishlist synchronizes across devices with guest migration | cca752c8dd8f3995540bab9e881a8ca72526f8af |
 | release-pipeline-policy | P1 | - | Antigravity | BACKLOG | NEEDS_DECISION | Approve PR creation, CI contracts, controlled merge and deployment tracking activation | - |
 | release-pr-ci | P1 | release-pipeline-policy | Codex | BACKLOG | NEEDS_DECISION | Reconcile dev PR and required CI without automatic merge | - |
 | release-merge-tracking | P2 | release-pr-ci | Codex | BACKLOG | NEEDS_DECISION | Apply signed merge approval and track exact deployed SHA without autonomous Production deploy | - |
