@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures/local-test";
 import { chair } from "./fixtures/mock-data";
 
 test("cart can add, change quantity, and remove a fixture product", async ({ page }) => {
@@ -26,7 +26,7 @@ test("guest can submit the quote list without checkout or account creation", asy
   await page.getByRole("textbox", { name: "Your name" }).fill("Guest Visitor");
   await page.getByRole("textbox", { name: "Phone number" }).fill("0901234567");
   await page.getByRole("button", { name: "Send quote request" }).click();
-  await expect(page.getByRole("status")).toContainText("Your reference is");
+  await expect(page.getByRole("status").filter({ hasText: "Your reference is #84" })).toBeVisible();
   expect(payload).toMatchObject({ source: "cart", items: [{ productId: chair.id, quantity: 1 }] });
   await expect(page.getByText("Your quote list is ready for a first piece.")).toBeVisible();
   await expect(page.getByText(/checkout|payment/i)).toHaveCount(0);

@@ -1,5 +1,7 @@
 # M3 browser tests
 
+Release CI uses the same suite on Linux and stores failure traces in `PLAYWRIGHT_OUTPUT_DIR` for 30 days. The local test fixture blocks browser requests outside localhost and fulfills the image optimizer with a tiny PNG, so image provider availability does not control test timing. Product markup and responsive image attributes remain asserted. CI never receives privileged Supabase/Cloudinary/Vercel credentials. These fixtures establish local behavior only; live Preview requires verified protection access and live Supabase must be active before readiness can be established.
+
 Run `npm ci`, `npx playwright install chromium firefox`, then `npm run test:e2e`. The Playwright config builds and starts the Next.js application on localhost:3100. It starts with a dummy publishable key and a test-only Node preload; all server-side requests to the hard-pinned Supabase origin are answered by deterministic read-only fixtures. Unknown routes and any non-GET request to Supabase fail. The preload refuses to start without `AVEN_E2E_MOCK=1`. No application source or Supabase project configuration is changed.
 
 The fixture data is illustrative test data inside this checkout only. It is never inserted into Supabase. Contact form success is tested by intercepting `/api/inquiries` in the browser before it reaches the server. The admin test visits a protected route without submitting credentials. All fixture tests are local; `E2E_BASE_URL` accepts only a localhost origin. A test failure or missing browser is not a pass, and no tests are skipped.

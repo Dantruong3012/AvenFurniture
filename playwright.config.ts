@@ -16,7 +16,7 @@ export default defineConfig({
   workers: 1,
   timeout: 30_000,
   reporter: "list",
-  outputDir: "/private/tmp/aven-m3-playwright-results",
+  outputDir: process.env.PLAYWRIGHT_OUTPUT_DIR || "/private/tmp/aven-m3-playwright-results",
   use: { baseURL, trace: "retain-on-failure" },
   projects: [
     { name: "chromium", use: { ...devices["Desktop Chrome"] } },

@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures/local-test";
 import { chair, table } from "./fixtures/mock-data";
 
 test("catalog displays fixture products and filters by name", async ({ page }) => {
@@ -23,7 +23,7 @@ test("category filter is reflected in the result", async ({ page }) => {
 
 test("collection navigation stays scoped and shows the unassociated empty state", async ({ page }) => {
   await page.goto("/collections");
-  await page.locator('a[href="/collections?collection=living"]').click();
+  await page.getByRole("main").locator('a[href="/collections?collection=living"]').click();
   await expect(page).toHaveURL(/\/collections\?collection=living/);
   await expect(page.getByRole("heading", { name: "Living" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "No pieces in this collection yet" })).toBeVisible();

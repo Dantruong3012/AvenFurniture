@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures/local-test";
 
 test("contact form validates without writing to shared database", async ({ page }) => {
   await page.route("**/api/inquiries", (route) => {
@@ -25,6 +25,6 @@ test("mocked inquiry confirmation does not send a live POST", async ({ page }) =
   await page.getByRole("textbox", { name: "Your name" }).fill("Test Visitor");
   await page.getByRole("textbox", { name: "Phone number" }).fill("0901234567");
   await page.getByRole("button", { name: "Send inquiry" }).click();
-  await expect(page.getByRole("status")).toContainText("Your reference is");
+  await expect(page.getByRole("status").filter({ hasText: "Your reference is #42" })).toBeVisible();
   expect(intercepted).toBe(1);
 });

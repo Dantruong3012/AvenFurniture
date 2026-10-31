@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures/local-test";
 
 test("unauthenticated admin route redirects to login", async ({ page }) => {
   await page.goto("/admin");

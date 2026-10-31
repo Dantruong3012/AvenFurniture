@@ -43,7 +43,9 @@ export class GitHubClient {
   }
 
   async request<T>(path: string, init: RequestInit = {}): Promise<T> {
-    const url = /^https?:\/\//i.test(path) ? path : `${this.baseUrl}${path.startsWith("/") ? path : `/${path}`}`;
+    const url = new URL(path, `${this.baseUrl}/`);
+    if (url.origin !== new URL(this.baseUrl).origin || url.username || url.password) throw new Error("GitHub request origin does not match configuration");
+    const readOnly = !init.method || ["GET", "HEAD"].includes(init.method.toUpperCase());
     const headers = new Headers(init.headers);
     headers.set("Accept", "application/vnd.github+json");
     headers.set("X-GitHub-Api-Version", "2022-11-28");
@@ -53,9 +55,9 @@ export class GitHubClient {
     for (let attempt = 1; attempt <= this.maxAttempts; attempt += 1) {
       let response: Response;
       try {
-        response = await this.fetchImpl(url, { ...init, headers });
-      } catch (error) {
-        if (attempt === this.maxAttempts || init.signal?.aborted) throw error;
+        response = await this.fetchImpl(url, { ...init, headers, redirect: "error", signal: init.signal ?? AbortSignal.timeout(15000) });
+      } catch {
+        if (!readOnly || attempt === this.maxAttempts || init.signal?.aborted) throw new Error("GitHub request failed or timed out; reconcile writes before retrying");
         await this.sleep(this.retryDelay(attempt));
         continue;
       }
@@ -64,19 +66,17 @@ export class GitHubClient {
         return await response.json() as T;
       }
 
-      const body = await response.text().catch(() => "");
-      let parsed: unknown = body;
-      try { parsed = body ? JSON.parse(body) : null; } catch { /* keep the original response text */ }
       const reset = Number(response.headers.get("x-ratelimit-reset"));
       const retryable = response.status === 429 || response.status >= 500 ||
         (response.status === 403 && (response.headers.has("retry-after") || response.headers.get("x-ratelimit-remaining") === "0"));
-      if (!retryable || attempt === this.maxAttempts) {
-        const message = typeof parsed === "object" && parsed && "message" in parsed ? String(parsed.message) : `GitHub API request failed (${response.status})`;
-        throw new GitHubApiError(message, { status: response.status, requestId: response.headers.get("x-github-request-id"), rateLimitReset: Number.isFinite(reset) && reset > 0 ? reset : null, responseBody: parsed });
+      if (!readOnly || !retryable || attempt === this.maxAttempts) {
+        throw new GitHubApiError(`GitHub API request failed (${response.status})`, { status: response.status, requestId: response.headers.get("x-github-request-id"), rateLimitReset: Number.isFinite(reset) && reset > 0 ? reset : null });
       }
       const retryAfter = Number(response.headers.get("retry-after"));
       const resetDelay = response.headers.get("x-ratelimit-remaining") === "0" && Number.isFinite(reset) ? Math.max(0, reset * 1000 - Date.now()) : 0;
-      await this.sleep(Math.min(this.maxDelayMs, retryAfter > 0 ? retryAfter * 1000 : resetDelay || this.retryDelay(attempt)));
+      const delay = retryAfter > 0 ? retryAfter * 1000 : resetDelay || this.retryDelay(attempt);
+      if (delay > this.maxDelayMs) throw new Error("GitHub retry window exceeds the request budget; retry later");
+      await this.sleep(delay);
     }
     throw new Error("GitHub request retry loop ended unexpectedly");
   }
@@ -87,16 +87,17 @@ export class GitHubClient {
     url.searchParams.set("per_page", "100");
     const results: T[] = [];
     let next: string | null = url.toString();
-    while (next) {
+    for (let count = 0; next && count < 20; count++) {
       const response = await this.request<unknown>(next);
       if (!Array.isArray(response)) throw new Error("Expected a GitHub API list response");
       results.push(...response as T[]);
       // GitHub's Link header is only available when making the request directly; use bounded page iteration instead.
       const page = Number(new URL(next).searchParams.get("page") ?? "1");
-      if (response.length < 100) break;
+      if (response.length < 100) { next = null; break; }
       url.searchParams.set("page", String(page + 1));
       next = url.toString();
     }
+    if (next) throw new Error("GitHub pagination limit exceeded; results are incomplete");
     return results;
   }
 
@@ -105,11 +106,18 @@ export class GitHubClient {
   }
 
   async commitStatuses(sha: string) {
-    return this.request<{ state: string; statuses: import("./types").GitHubCommitStatus[] }>(`/repos/${encodeURIComponent(this.owner)}/${encodeURIComponent(this.repo)}/commits/${encodeURIComponent(sha)}/status`);
+    return { statuses: await this.paginate<import("./types").GitHubCommitStatus>(`/repos/${encodeURIComponent(this.owner)}/${encodeURIComponent(this.repo)}/commits/${encodeURIComponent(sha)}/statuses`) };
   }
 
   async checkRuns(sha: string) {
-    return this.request<{ total_count: number; check_runs: import("./types").GitHubCheckRun[] }>(`/repos/${encodeURIComponent(this.owner)}/${encodeURIComponent(this.repo)}/commits/${encodeURIComponent(sha)}/check-runs`);
+    const runs: import("./types").GitHubCheckRun[] = [];
+    for (let page = 1; page <= 20; page++) {
+      const result = await this.request<{ check_runs: import("./types").GitHubCheckRun[] }>(`/repos/${encodeURIComponent(this.owner)}/${encodeURIComponent(this.repo)}/commits/${encodeURIComponent(sha)}/check-runs?filter=latest&per_page=100&page=${page}`);
+      if (!Array.isArray(result.check_runs)) throw new Error("GitHub check response is malformed");
+      runs.push(...result.check_runs);
+      if (result.check_runs.length < 100) return { total_count: runs.length, check_runs: runs };
+    }
+    throw new Error("GitHub check pagination limit exceeded");
   }
 
   private retryDelay(attempt: number) {

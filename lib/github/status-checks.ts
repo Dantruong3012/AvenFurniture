@@ -13,9 +13,13 @@ function statusConclusion(statuses: GitHubCommitStatus[], runs: GitHubCheckRun[]
 }
 
 export function summarizeStatusChecks(statuses: GitHubCommitStatus[], checkRuns: GitHubCheckRun[], requiredChecks: string[] = []): GitHubCheckSummary {
+  // APIs include old failures and prior attempts. Retain the latest result for
+  // each provider/context; a pending re-run must supersede its old success.
+  statuses = [...statuses].sort((a, b) => b.updated_at.localeCompare(a.updated_at)).filter((item, i, all) => all.findIndex(other => other.context === item.context) === i);
+  checkRuns = [...checkRuns].sort((a, b) => b.id - a.id).filter((item, i, all) => all.findIndex(other => other.name === item.name && other.app?.id === item.app?.id) === i);
   const succeeded = new Set<string>();
   for (const status of statuses) if (status.state === "success") succeeded.add(status.context);
-  for (const run of checkRuns) if (run.status === "completed" && (run.conclusion === "success" || run.conclusion === "neutral" || run.conclusion === "skipped")) succeeded.add(run.name);
+  for (const run of checkRuns) if (run.status === "completed" && run.conclusion === "success") succeeded.add(run.name);
   const missingRequired = requiredChecks.filter((name) => !succeeded.has(name));
   const state = statusConclusion(statuses, checkRuns);
   return { state, statuses, checkRuns, missingRequired, successfulRequired: requiredChecks.filter((name) => succeeded.has(name)), ready: state === "success" && missingRequired.length === 0 };

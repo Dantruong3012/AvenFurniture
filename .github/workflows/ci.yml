@@ -1,0 +1,137 @@
+name: Release CI
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main, dev/aven-autonomous-backlog]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  NEXT_TELEMETRY_DISABLED: "1"
+  NEXT_PUBLIC_SITE_URL: http://127.0.0.1:3100
+  NEXT_PUBLIC_SUPABASE_URL: https://eofdtqnnqgxaoykcbfrv.supabase.co
+  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci_fixture_only
+  PLAYWRIGHT_OUTPUT_DIR: playwright-results
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.17.1
+          cache: npm
+      - run: npm ci
+      - name: Run lint
+        run: |
+          npm run lint
+
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.17.1
+          cache: npm
+      - run: npm ci
+      - name: Run typecheck
+        run: |
+          npx next typegen
+          npm run typecheck
+
+  unit-pglite-integration:
+    name: unit-pglite-integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.17.1
+          cache: npm
+      - run: npm ci
+      - name: Run unit-pglite-integration
+        run: |
+          npm test
+          node --test .ai-collab/orchestrator*.test.mjs .ai-collab/autopilot.test.mjs
+
+  local-fixture-e2e:
+    name: local-fixture-e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.17.1
+          cache: npm
+      - run: npm ci
+      - name: Run local-fixture-e2e
+        run: |
+          npx playwright install --with-deps chromium firefox
+          npm run test:e2e
+      - name: Retain fixture test failure evidence
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fixture-e2e-${{ github.sha }}-${{ github.run_attempt }}
+          path: playwright-results
+          retention-days: 30
+          if-no-files-found: ignore
+
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.17.1
+          cache: npm
+      - run: npm ci
+      - name: Run build
+        run: |
+          npm run build
+
+  security:
+    name: security
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.17.1
+          cache: npm
+      - run: npm ci
+      - name: Run security
+        run: |
+          npm run check:release-security
+          npm audit --audit-level=high
+
