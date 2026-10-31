@@ -58,6 +58,10 @@ globalThis.fetch = async function e2eFetch(input, init) {
   const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
   if (url.origin !== origin) return actualFetch(input, init);
   const method = (init?.method || (typeof input === "object" && "method" in input ? input.method : "GET")).toUpperCase();
+  if (method === "POST" && url.pathname === "/rest/v1/rpc/list_public_consultants") {
+    // Explicit fixture for this read-only RPC; no request reaches Supabase.
+    return Response.json([{ public_name: "Fixture Consultant", avatar_url: null, zalo_phone: "0901234567", sort_order: 0 }]);
+  }
   if (method !== "GET") throw new Error(`E2E fixture blocked Supabase ${method}.`);
   const path = url.pathname;
   let rows;

@@ -159,15 +159,18 @@ test("listing and article metadata describe published content", async () => {
 });
 
 test("sitemap includes the listing and each published article", async () => {
-  const sitemap = loadView("app/sitemap.ts", {
+  const sitemap = loadView("app/sitemap.xml/route.ts", {
     "@/lib/repositories/supabaseProductRepository": { listPublicCategories: async () => [], listSitemapProducts: async () => [] },
     "@/lib/catalog/site-url": { siteOrigin: () => "https://aven.example" },
     "@/lib/journal/articles": journal,
-  }).default;
-  const entries = await sitemap();
-  assert.ok(entries.some(({ url }) => url === "https://aven.example/journal"));
+    "@/lib/catalog/sitemap": loadModule("lib/catalog/sitemap.ts"),
+  }).GET;
+  const response = await sitemap();
+  assert.equal(response.status, 200);
+  const entries = [...(await response.text()).matchAll(/<url>(.*?)<\/url>/gs)].map(match => match[1]);
+  assert.ok(entries.some(entry => entry.includes("<loc>https://aven.example/journal</loc>")));
   for (const article of journal.listJournalArticles()) {
-    assert.ok(entries.some(({ url, lastModified }) => url === `https://aven.example/journal/${article.frontmatter.slug}` && lastModified === article.frontmatter.lastUpdated));
+    assert.ok(entries.some(entry => entry.includes(`<loc>https://aven.example/journal/${article.frontmatter.slug}</loc>`) && entry.includes(`<lastmod>${new Date(article.frontmatter.lastUpdated).toISOString()}</lastmod>`)));
   }
 });
 
