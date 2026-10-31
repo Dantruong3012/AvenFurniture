@@ -1,6 +1,8 @@
 # Production release execution — 2026-10-31
 
-Status: IN_PROGRESS. Owner-approved SHA 1501f2c is pushed and Draft PR #1 exists; real CI exposed one environment-dependent test that is corrected locally. Supabase is active, Vercel public canonical env is verified, but ten migrations/backup, Auth configuration, main protection and independent review still block Production release.
+Latest continuation: [Release handoff — 2026-10-31](release-handoff-2026-10-31.md). Read this first: later push, protection, Auth and CI results supersede historical observations below.
+
+Historical status: IN_PROGRESS. Owner-approved SHA 1501f2c is pushed and Draft PR #1 exists; real CI exposed one environment-dependent test that is corrected locally. Supabase is active, Vercel public canonical env is verified, but ten migrations/backup, Auth configuration, main protection and independent review still block Production release.
 
 The owner requested actual release execution, preserving existing release tools/security gates, explicitly requiring approval before push, draft PR creation, Supabase Resume, Production migrations, environment changes and merge/deployment. The earlier instruction to stop Antigravity CLI use remains in effect; no independent review is invented. All four deferred Email tasks remain excluded. Existing orchestrator receipts/configuration remain unchanged.
 

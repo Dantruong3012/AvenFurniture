@@ -1,6 +1,6 @@
 # Kế hoạch triển khai AvenFurniture
 
-Cập nhật: 15/10/2026. Phase 0 đủ để bắt đầu Feature Development; Phase 1 quản lý catalog và Phase 2 Cloudinary/storefront đã nghiệm thu tích hợp. Xem báo cáo 12–13 cho trạng thái hiện tại. Các roadmap cũ là kế hoạch MVP tổng thể.
+Cập nhật trạng thái release: 31/10/2026. Đọc [bàn giao release](../../docs/release-handoff-2026-10-31.md), [kết quả tiếp tục và rehearsal database](../../docs/release-continuation-2026-10-31.md) và [STATE](../../.ai-collab/STATE.md) trước khi làm tiếp. Release vẫn BLOCKED; Production migrations/merge/deploy chưa được duyệt. Các tài liệu Phase bên dưới giữ bối cảnh triển khai ngày 15/10; roadmap cũ không phải trạng thái backlog hiện tại.
 
 ## Mục tiêu
 

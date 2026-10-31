@@ -107,3 +107,16 @@ test('child timeout, stop request, nonzero exit and forbidden flags fail closed'
     await assert.rejects(execute(['codex', '--dangerously-bypass-approvals-and-sandbox'], { root: dir, timeoutMs: 1000 }), /forbidden/);
   } finally { rmSync(dir, { recursive: true }); }
 });
+test('child closing stdin during a prompt rejects without crashing the coordinator', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'aven-stdin-'));
+  try {
+    await assert.rejects(execute([process.execPath, '-e', 'process.stdin.destroy(); process.exit(0)'], {
+      root: dir, timeoutMs: 5000, input: 'synthetic prompt '.repeat(131072),
+    }), /STDIN_ERROR/);
+    // The executor remains usable after cleanup; no asynchronous EPIPE escapes.
+    const result = await execute([process.execPath, '-e', 'process.stdin.resume(); process.stdin.on("end",()=>console.log("consumed"))'], {
+      root: dir, timeoutMs: 5000, input: 'synthetic prompt',
+    });
+    assert.equal(result.stdout.trim(), 'consumed');
+  } finally { rmSync(dir, { recursive: true }); }
+});

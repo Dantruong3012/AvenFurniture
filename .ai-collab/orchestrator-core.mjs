@@ -192,6 +192,10 @@ export async function execute(command, { root, timeoutMs, stopFile, log, onChild
     const poll = setInterval(() => { if (stopFile && existsSync(stopFile)) kill('STOPPED'); }, 200);
     child.stdout.on('data', (chunk) => { output += chunk; if (output.length > 20 * 1024 * 1024) kill('OUTPUT_LIMIT'); });
     child.stderr.on('data', (chunk) => { errors += chunk; if (errors.length > 20 * 1024 * 1024) kill('OUTPUT_LIMIT'); });
+    // A child may exit before consuming its prompt. Stream errors are separate
+    // from ChildProcess errors; leave rejection to close so logs and checkpoint
+    // handling run after the process group has been stopped.
+    child.stdin.on('error', () => { if (child.pid) kill('STDIN_ERROR'); });
     const cleanup = () => {
       clearTimeout(timer); clearTimeout(killTimer); clearInterval(poll);
       if (reason) { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* exited */ } }

@@ -27,6 +27,7 @@ import {dirname} from 'node:path'; import {fileURLToPath} from 'node:url';
 const invocationCwd=process.cwd();
 process.chdir(dirname(fileURLToPath(import.meta.url)));
 const args=process.argv.slice(2), mode=JSON.parse(readFileSync('scenario.json')).mode;
+if(!args.includes('-p')&&mode==='close-stdin'){process.stdin.destroy();process.exit(0);}
 const agy=args.includes('-p'); let prompt=agy?args[args.indexOf('-p')+1]:await new Promise(resolve=>{let s='';process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>resolve(s));});
 if(agy&&invocationCwd===process.cwd())process.exit(9);
 const phase=agy?((prompt.includes('Plan task')||prompt.includes('expanding authorized files'))?'plan':'review'):(prompt.includes('Request the coordinator')?'commit':'implement');
@@ -34,6 +35,7 @@ const id=(prompt.match(/(?:Plan task|Review task|Implement task) (t[12])/i)||[])
 if(agy&&phase==='plan'&&prompt.includes('Repository tracked files'))process.exit(7);
 if(agy&&phase==='review'&&prompt.includes('Review task')&&(!prompt.includes('NEW FILES')||!prompt.includes('verified')||prompt.includes('CURRENT FILES')))process.exit(7);
 const result={status:'READY',summary:'Fixture evidence',paths:[id+'.txt'],details:'Implement the exact proof file.'};
+if(agy&&phase==='plan'&&mode==='close-stdin')result.details='Synthetic plan context. '.repeat(65536);
 if(agy&&prompt.includes('Diagnose check failure')){result.status='CHANGES_REQUESTED';result.summary='Fixture diagnosis';result.details='Root cause: fixture check assertion failed. Correct the task-owned implementation.';}
 if(agy&&phase==='plan'&&mode==='architecture-block') {
   const recovering=prompt.includes('reviewed inquiry-status architecture recovery');
@@ -231,7 +233,16 @@ test('repeated interrupted review blocks without a commit or false approval',asy
  const dir=fixture('stream-always');try{const r=await run(dir);assert.equal(r.code,1);assert.equal(checkpoint(dir).status,'BLOCKED');assert.equal(events(dir).filter(e=>e.phase==='CLI_TRANSIENT_RETRY').length,1);assert.equal(events(dir).filter(e=>e.phase==='DONE').length,0);assert.equal(gitCall(dir,'rev-list','--count','HEAD'),'1');}finally{rmSync(dir,{recursive:true});}
 });
 for(const mode of ['reject-review','fail-check','false-commit','mutate-review'])test(mode+' is BLOCKED without completing a task',async()=>{
- const dir=fixture(mode);try{const r=await run(dir);assert.equal(r.code,1);assert.equal(checkpoint(dir).status,'BLOCKED');assert.equal(events(dir).filter(e=>e.phase==='DONE').length,0);assert.equal(spawnSync('git',['rev-list','--count','HEAD'],{cwd:dir,encoding:'utf8'}).stdout.trim(),'1');if(['reject-review','fail-check'].includes(mode))assert.equal(checkpoint(dir).round,3);}finally{rmSync(dir,{recursive:true});}
+ const dir=fixture(mode);try{const r=await run(dir);assert.equal(r.code,1,r.output);assert.equal(checkpoint(dir).status,'BLOCKED',r.output);assert.equal(events(dir).filter(e=>e.phase==='DONE').length,0);assert.equal(spawnSync('git',['rev-list','--count','HEAD'],{cwd:dir,encoding:'utf8'}).stdout.trim(),'1');if(['reject-review','fail-check'].includes(mode))assert.equal(checkpoint(dir).round,3);}finally{rmSync(dir,{recursive:true});}
+});
+test('closed child stdin persists a BLOCKED checkpoint without review or commit', async () => {
+ const dir=fixture('close-stdin');try{
+  const result=await run(dir);assert.equal(result.code,1,result.output);
+  const saved=checkpoint(dir);assert.equal(saved.status,'BLOCKED',result.output);assert.equal(saved.error,'STDIN_ERROR');
+  assert.equal(saved.phase,'IN_PROGRESS');assert.match(readFileSync(join(dir,'.ai-collab/tasks/t1/IMPLEMENTATION.md'),'utf8'),/Status: BLOCKED/);
+  assert.equal(events(dir).some(e=>e.phase==='DONE'||e.operation==='review'||e.operation==='commit'),false);
+  assert.equal(gitCall(dir,'rev-list','--count','HEAD'),'1');assert.equal(existsSync(join(dir,'.ai-collab/.lock')),false);
+ }finally{rmSync(dir,{recursive:true});}
 });
 test('stop and resume preserves partial work and finishes without duplicate commit',async()=>{
  const dir=fixture('stop-resume');try{const active=run(dir);await waitFor(dir,'implement');await run(dir,'stop');assert.equal((await active).code,1);assert.equal(checkpoint(dir).status,'STOPPED');const result=await run(dir,'resume');assert.equal(result.code,0,result.output);assert.equal(events(dir).filter(e=>e.phase==='DONE').length,1);}finally{rmSync(dir,{recursive:true});}
