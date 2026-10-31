@@ -3,7 +3,7 @@
 Status: BLOCKED
 Local implementation: IMPLEMENTED, TESTED
 Dependency/remote activation: release-pr-ci live acceptance and owner Production approvals pending
-Commit: pending
+Commit: 9065c9e4ba69495b689a4ec430fbb8283e7940c0
 
 Prepared and tested local mechanisms after the CI implementation passed local validation. This does not advance remote release past the BLOCKED dependency. The owner delegated local decisions and stopped further Antigravity CLI calls. No independent review, real signed approval, merge or deployment is claimed.
 

@@ -1,8 +1,8 @@
 # Implementation: release-pipeline-policy
 
-Status: APPROVED
+Status: DONE
 Approval authority: Repository owner, explicit policy approval in session 2026-10-31
-Commit: pending
+Commit: dce1dad54ed7ae18d0a26a2ae5327e178226fe2f
 
 The owner approved the concrete policy proposal and delegated local decisions to Codex, explicitly instructing no further Antigravity CLI calls. The earlier BLOCKED decision is superseded by that owner decision. An actual Antigravity proposal receipt remains in private runtime; no Antigravity implementation review is claimed. The owner exception applies only to this session's three local Release tasks; unattended orchestrator receipt checks remain unchanged.
 

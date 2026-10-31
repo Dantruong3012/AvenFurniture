@@ -78,3 +78,11 @@ CI/configuration: `.github/workflows/ci.yml`, `.github/pull_request_template.md`
 Implementation: `lib/github/client.ts`, `lib/github/types.ts`, `lib/github/status-checks.ts`, `lib/github/controlled-merge.ts`, `lib/github/release-tracking.ts`, `lib/vercel/deployment.ts`, `lib/vercel/types.ts`, `scripts/check-release-security.mjs`, `scripts/release.mts`.
 
 Tests: `tests/github-ci.test.mjs`, `tests/github-controlled-merge.test.mjs`, `tests/vercel-deployment.test.mjs`, `tests/release-security.test.mjs`, `tests/release-tracking.test.mjs`, `tests/release-cli.test.mjs`, `tests/e2e/fixtures/local-test.ts`, and the five existing E2E specs `admin-redirect`, `cart`, `catalog`, `contact-form`, `product-detail`. No SQL migration, application Email source, Production secret or orchestrator implementation was modified.
+
+## Local commits and task acceptance
+
+- dce1dad: owner-approved Release policy; local policy task DONE under the explicitly recorded owner review-gate exception.
+- dbe8937: CI workflow/security/test fixes; IMPLEMENTED and TESTED locally, remote acceptance BLOCKED.
+- 9065c9e: merge preflight/exact serving-SHA tracking/readiness runbook; IMPLEMENTED and TESTED locally, dependency and remote activation BLOCKED.
+
+These commits are local only. Policy APPROVED is the owner decision; there is no independent Antigravity/code/PR approval. No PR, remote CI execution, merge or new Production deployment resulted from these commits. A separate metadata commit records these hashes in backlog/task artifacts.
