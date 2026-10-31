@@ -50,7 +50,78 @@
       "sha256": "a0b61eac1e9e69efa2b01196d9fd21b83480c748c2ccc3851657d78ec5b2631f"
     }
   ],
-  "productionApproval": false,
-  "backupWaiver": false,
-  "executed": false
+  "productionApproval": true,
+  "backupWaiver": true,
+  "executed": true,
+  "backupWaiverDetails": {
+    "approvedBy": "Dantruong3012",
+    "release": "PR #1",
+    "scopeConfirmed": true,
+    "acceptedData": [
+      "3 Auth accounts",
+      "3 identities",
+      "1 MFA factor",
+      "10 sessions",
+      "3 staff profiles",
+      "3 media metadata rows",
+      "1 category",
+      "3 audit logs"
+    ],
+    "acceptedRisk": "Data including Auth/MFA may be unrecoverable after migration failure; owner confirms it can be recreated",
+    "productionMigrationAuthorized": true,
+    "mergeAuthorized": false,
+    "deploymentAuthorized": false
+  },
+  "preparedExecution": {
+    "project": "eofdtqnnqgxaoykcbfrv",
+    "candidateHeadAtPreflight": "eedc8a8990da5e46e981604c21dd667e8ed48c30",
+    "baseShaAtPreflight": "7454ca2eacb6185ca3611159d80c0aadf1cd9cd1",
+    "packetPath": ".ai-collab/.runtime/solo-waiver-release-preflight/production-migrations-reviewed.sql",
+    "packetSha256": "12d5154f2409e9dcecdfc090e5540118df228685d9685fba4740ca6e5ed5bfd0",
+    "transaction": "one atomic transaction, including original SQL and accurate migration history inserts",
+    "lockTimeout": "5s",
+    "statementTimeout": "60s per statement",
+    "executed": true
+  },
+  "execution": {
+    "ownerApprovedExactPacket": true,
+    "packetSha256": "12d5154f2409e9dcecdfc090e5540118df228685d9685fba4740ca6e5ed5bfd0",
+    "receivedAt": "2026-10-31T17:12:26.016Z",
+    "managementSqlHttpStatus": 201,
+    "attempts": 1,
+    "pendingFieldMeaning": "Historical approved batch, now applied; not a list still missing",
+    "pendingAfter": [],
+    "historyCount": 15,
+    "appliedVersions": [
+      "20261014080743",
+      "20261014080757",
+      "20261014133618",
+      "20261014134333",
+      "20261015085103",
+      "20261016103000",
+      "20261017163000",
+      "20261017180000",
+      "20261017193000",
+      "20261017210000",
+      "20261017223000",
+      "20261017230000",
+      "20261017233000",
+      "20261018000000",
+      "20261018010000"
+    ],
+    "postflightVerifiedAt": "2026-10-31T17:15:56.379Z",
+    "schemaCounts": {
+      "tables": 17,
+      "columns": 140,
+      "indexes": 52,
+      "policies": 43,
+      "functions": 30,
+      "constraints": 105
+    },
+    "readOnlyPostflight": true,
+    "allTenSqlHashesMatch": true,
+    "evidenceDirectory": ".ai-collab/.runtime/approved-production-migrations-20261101",
+    "mergeAuthorized": false,
+    "deploymentAuthorized": false
+  }
 }

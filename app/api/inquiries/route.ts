@@ -1,11 +1,15 @@
 import { submitCustomerInquiry } from "@/lib/repositories/supabaseInquiryRepository";
 import { validateCustomerInquiryInput } from "@/lib/validation/inquiry";
+import { InquiryBodyTooLarge, inquiryRetryAfter, readInquiryJson } from "@/lib/security/inquiry-admission";
 
 export async function POST(request: Request) {
   let input: unknown;
   try {
-    input = await request.json();
-  } catch {
+    input = await readInquiryJson(request);
+  } catch (error) {
+    if (error instanceof InquiryBodyTooLarge) {
+      return Response.json({ success: false, error: "Your inquiry is too large. Please shorten it.", fields: {} }, { status: 413, headers: { "Cache-Control": "no-store" } });
+    }
     return Response.json({ success: false, error: "Enter a valid JSON inquiry.", fields: {} }, { status: 400 });
   }
   const validated = validateCustomerInquiryInput(input);
@@ -18,6 +22,10 @@ export async function POST(request: Request) {
   }
   if ((source === "cart" && items.length === 0) || (source === "product" && items.length !== 1)) {
     return Response.json({ success: false, error: "Check your selected products.", fields: { items: "A cart needs at least one item; a product inquiry needs exactly one." } }, { status: 400 });
+  }
+  const retryAfter = inquiryRetryAfter(request);
+  if (retryAfter) {
+    return Response.json({ success: false, error: "Too many inquiries. Please wait a minute and try again.", fields: {} }, { status: 429, headers: { "Retry-After": String(retryAfter), "Cache-Control": "no-store" } });
   }
   try {
     const { id, reference, is_duplicate } = await submitCustomerInquiry(validated.data);

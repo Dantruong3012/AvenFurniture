@@ -92,6 +92,38 @@ test("POST sanitizes internal exceptions", async () => {
   assert.doesNotMatch(JSON.stringify(data), /credentials|database|stack|SUPABASE/);
 });
 
+test("POST rejects oversized bodies with 413 before RPC, including false Content-Length", async () => {
+  const { POST, calls } = api();
+  const body = JSON.stringify(input({ ignored: "x".repeat(300000) }));
+  for (const headers of [{}, { "Content-Length": "1" }, { "Content-Length": String(body.length) }]) {
+    const response = await POST(new Request("https://storefront.test/api/inquiries", { method: "POST", body, headers }));
+    assert.equal(response.status, 413);
+    assert.equal((await response.json()).success, false);
+  }
+  assert.equal(calls.length, 0);
+});
+
+test("POST limits fresh keys and retries before persistence and returns Retry-After", async () => {
+  const { POST, calls } = api();
+  for (let i = 0; i < 10; i++) {
+    assert.equal((await POST(request(input({ idempotency_key: crypto.randomUUID() })))).status, 201);
+  }
+  for (const idempotency_key of [key, crypto.randomUUID()]) {
+    const response = await POST(request(input({ idempotency_key })));
+    assert.equal(response.status, 429);
+    assert.ok(Number(response.headers.get("Retry-After")) > 0);
+    assert.equal(response.headers.get("Cache-Control"), "no-store");
+  }
+  assert.equal(calls.length, 10);
+});
+
+test("POST still accepts a maximum validated cart with escaped and multibyte text", async () => {
+  const { POST, calls } = api();
+  const body = input({ message: "\u0001".repeat(10000), items: Array.from({ length: 100 }, () => ({ ...item, productName: "界" + "\u0001".repeat(199), productSlug: "a".repeat(160) })) });
+  assert.equal((await POST(request(body))).status, 201);
+  assert.equal(calls.length, 1);
+});
+
 // A small hook harness exercises actual TSX event handlers and element props.
 // Browser layout/focus trapping are native dialog behavior, not simulated here.
 function componentHarness(filename, overrides = {}, globals = {}) {

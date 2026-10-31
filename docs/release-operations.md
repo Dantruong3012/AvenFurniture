@@ -2,6 +2,8 @@
 
 Policy: [release-policy.md](release-policy.md). Current infrastructure findings: [readiness audit](production-readiness-2026-10-31.md). The local release tools are separate from the existing unattended `.ai-collab/orchestrator.mjs`; they do not weaken its agent receipts or activate its release configuration.
 
+Current owner decision: Codex-only Solo release, main human approvals 0 (verified), six required CI checks preserved, and a release-specific backup waiver accepted including the enumerated Auth/MFA/session/staff/media/category/audit data (owner confirmed these can be recreated). Read [current migration preparation](production-migrations-waiver-preflight.md). Earlier independent-human/full-backup requirements below are superseded only to that extent; do not re-request the waiver. The exact owner-approved ten-migration packet was applied once and passed read-only postflight (15 versions); see the linked report/manifest. No merge or deploy is authorized. Existing CLI validators have not been changed to implement Solo and must not be claimed to pass it; no Orchestrator/tooling rewrite is part of this work.
+
 ## Prerequisites
 
 Use Node 22.17.1 and `npm ci`. Operator scripts use Node's experimental type stripping; the runtime warnings are expected on this Node version. Set `GH_TOKEN` or `GITHUB_TOKEN` in a protected operator environment outside the checkout, never in arguments or chat. PR creation needs a credential with PR write permission; inspection needs repository/check/status/review/protection read access. Use a separately scoped Vercel read token for `VERCEL_TOKEN`. Project/team IDs come from the verified disabled/manual release config. Do not decrypt environment values or load Production application secrets into CI.
@@ -41,7 +43,7 @@ On GitHub, configure the `main` protection rule before merge: six exact contexts
 
 ## Exact-SHA merge approval
 
-The independent reviewer cannot be the PR author or a bot. Owner-delegated local decisions do not satisfy this remote review. Before approval, resolve the inactive Supabase project, verify migration history/prerequisites and read-only Preview health, and explicitly approve any needed Production environment change. Verify Vercel's Git auto-deployment behavior **before** approving a merge.
+Under the owner-approved Solo exception, Codex technical verification and owner operational approval replace the former independent-human requirement without creating a GitHub review. Before merge approval, verify active Supabase status, exact migration history/prerequisites, accepted waiver scope and read-only Preview health; separately approve any needed Production environment change. Verify Vercel's Git auto-deployment behavior **before** approving a merge.
 
 An owner-controlled signer may use the exported `signMergeAuthorization` helper with a random secret of at least 32 characters supplied out of band. Claims are `actor` (currently `Dantruong3012`), `repository`, `pullRequest`, full `headSha`, full `baseSha`, `baseBranch: main`, `issuedAt`, `expiresAt` (Unix seconds, at most 900 seconds apart), and `productionImpactApproved: true`. The owner signs only after explicitly approving that exact merge and its Production impact. Store the resulting token outside the checkout in a mode-600 file; do not print it. Set `AVEN_MERGE_AUTHORIZATION_SECRET` in the protected operator environment. No signing secret was provisioned in this work and Codex has not signed a real approval.
 
