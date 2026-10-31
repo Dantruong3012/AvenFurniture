@@ -1,0 +1,18 @@
+# Implementation: release-merge-tracking
+
+Status: BLOCKED
+Local implementation: IMPLEMENTED, TESTED
+Dependency/remote activation: release-pr-ci live acceptance and owner Production approvals pending
+Commit: pending
+
+Prepared and tested local mechanisms after the CI implementation passed local validation. This does not advance remote release past the BLOCKED dependency. The owner delegated local decisions and stopped further Antigravity CLI calls. No independent review, real signed approval, merge or deployment is claimed.
+
+Signed authorization now binds repository, PR, full head/base SHA, target, actor, explicit Production impact and a maximum 15-minute lifetime. Branch policy requires current human approvals, strict checks, admin enforcement, stale dismissal, no force/deletion/review bypass and every configured required context. Controlled merge re-reads identity, uses merge-commit strategy and records resulting merge SHA; an uncertain write returns unknown and must be reconciled, never automatically retried. The operator CLI intentionally exposes only PR reconciliation, status and merge-check, with no merge/deploy command.
+
+Vercel observer uses project /v9, list /v7, deployment /v13 and alias /v4 GETs with deadlines, bounded pages and strict project/repository/branch/target/full merged SHA validation. A READY candidate alone does not prove it serves Production. Status records independently distinguish CI Passed, Merge Approved, Merged, Deployment Pending, Deployed, Deployment Failed and Rolled Back. Deployed needs the verified serving alias plus fresh health; rollback needs prior deployment evidence and the exact known-good alias/SHA plus health. Unknown evidence stays unverified. Private observations are append-only with an atomic latest snapshot and shared coordinator lock.
+
+Validation: real operator CLI exercised in disposable Git repositories with deterministic GitHub/Vercel/health fixtures; no status/preflight test made a write request. Tests cover missing policy, signed approval, human/bot/stale/dismissed review handling, lost PR creation response, differing merge/head SHA, wrong target/project/branch/detail, alias mismatch, health failure, rollback provenance and error redaction. The actual CLI also read the live GitHub dev SHA without --write and returned PR Pending; no PR existed. Final application/SQL/CLI suite: 232 passed, zero failed/skipped; production build and TypeScript passed. Lint passed with the same two pre-existing runner warnings. Local fixture E2E: 30/30 passed on unchanged storefront/test tree from the CI task. Final runner recheck and final metadata scans are recorded below after completion.
+
+Final runner suite: 162/162 passed, zero failed/skipped. Final typecheck and lint passed; final production build passed. No orchestrator implementation or receipt gate was changed. Secret scanning of staged content and Git whitespace checks run before the local commit.
+
+Read-only readiness audit: Production remains dpl_9whkyD1hL2HYVsxuyR2zNXvjR1Ge at 7454ca2eacb6185ca3611159d80c0aadf1cd9cd1, Preview at old dev SHA 8a267eeb7cff6a7246927c444d7466c10f35d181. Supabase is INACTIVE, live schema/history/Auth/RLS unverified, sitemap 500 and missing-product 503, Preview requires SSO, GitHub lacks active protection/CI/reviewer/API auth. See docs/production-readiness-2026-10-31.md and docs/release-operations.md for exact owner actions. No source was pushed and release config remains disabled/manual. No email source/backlog policy was changed.

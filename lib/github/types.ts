@@ -89,9 +89,12 @@ export type PullRequestReconciliation = {
 
 export type MergeAuthorization = {
   actor: string;
+  repository: string;
   pullRequest: number;
   headSha: string;
+  baseSha: string;
   baseBranch: string;
+  productionImpactApproved: boolean;
   issuedAt: number;
   expiresAt: number;
 };
@@ -101,6 +104,12 @@ export type BranchProtectionStatus = {
   requiredApprovingReviews: number;
   requiredStatusChecks: string[];
   requireLinearHistory: boolean;
+  enforceAdmins: boolean;
+  dismissStaleReviews: boolean;
+  strictChecks: boolean;
+  allowForcePushes: boolean;
+  allowDeletions: boolean;
+  hasReviewBypass: boolean;
 };
 
 export type MergeValidationResult = {

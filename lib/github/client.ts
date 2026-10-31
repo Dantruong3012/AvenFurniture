@@ -63,7 +63,8 @@ export class GitHubClient {
       }
       if (response.ok) {
         if (response.status === 204) return undefined as T;
-        return await response.json() as T;
+        try { return await response.json() as T; }
+        catch { throw new Error("GitHub returned invalid JSON; response details withheld"); }
       }
 
       const reset = Number(response.headers.get("x-ratelimit-reset"));

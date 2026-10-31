@@ -8,12 +8,15 @@ export type DeploymentState =
   | "UNKNOWN";
 
 export interface VercelDeployment {
+  projectId?: string;
+  target?: string | null;
   uid?: string;
   id?: string;
   url?: string;
   state?: string;
   readyState?: string;
   createdAt?: number;
+  created?: number;
   meta?: Record<string, string | undefined>;
   gitSource?: { sha?: string; ref?: string; repoId?: number };
   inspectorUrl?: string;
@@ -25,6 +28,10 @@ export interface DeploymentObservation {
   deployment?: VercelDeployment;
   checkedAt: string;
   message?: string;
+  serving?: boolean;
+  servingDeploymentId?: string;
+  servingCommitSha?: string;
+  servingReady?: boolean;
 }
 
 export interface ObserveDeploymentOptions {
@@ -33,6 +40,8 @@ export interface ObserveDeploymentOptions {
   projectId?: string;
   teamId?: string;
   token?: string;
+  repository?: string;
+  productionAlias?: string;
   fetcher?: typeof fetch;
   pollIntervalMs?: number;
   maxWaitMs?: number;
