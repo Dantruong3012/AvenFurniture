@@ -54,3 +54,5 @@ Production alias vẫn `aven-furniture.vercel.app` → `dpl_9whkyD1hL2HYVsxuyR2z
 - Security scan: pass; dependency audit gate pass, 0 high/critical và 16 moderate còn tồn tại. Staged blobs được quét riêng trước local commit.
 
 Raw receipts/logs local ignored: `.ai-collab/.runtime/release-continuation-20261031/`. Không commit raw logs, API bodies hay credentials. Checkpoint hiện hữu và release config giữ nguyên. Task release vẫn BLOCKED; local commit không đồng nghĩa DONE hoặc remote CI pass.
+
+Local implementation commit: `fd618db8235cf0a3e3d096d37eea81b94c680aa0`. Metadata commit tiếp theo ghi hash này trong BACKLOG/STATE/IMPLEMENTATION; khi xin push phải dùng full HEAD sau metadata commit, không chỉ hash implementation. Pushed candidate vẫn `4d78b2c`. Working tree đã được kiểm tra và toàn bộ thay đổi thuộc lần tiếp tục này, gồm snapshot bàn giao local trước đó, đã được giữ lại trong commit.
