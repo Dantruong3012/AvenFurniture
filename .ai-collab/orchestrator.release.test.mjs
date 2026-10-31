@@ -135,6 +135,22 @@ for (const scenario of ['existing-fixture', 'wrong-path', 'arbitrary-secret']) t
   if (scenario === 'existing-fixture') assert.deepEqual(scanOutgoing('base', 'head', policy, git), { commits: 1, blobs: 1 });
   else assert.throws(() => scanOutgoing('base', 'head', policy, git), /Potential secret/);
 });
+for (const scenario of ['historical-seo-fixture', 'seo-wrong-path', 'seo-additional-credential']) test(`invalid-origin fixture exemption remains exact: ${scenario}`, () => {
+  const path = scenario === 'seo-wrong-path' ? 'application.js' : 'tests/production-seo.test.mjs';
+  const dummy = 'https://user:' + 'password@example.test';
+  const content = `const invalid = "${dummy}";` + (scenario === 'seo-additional-credential' ? '\nconst other = "https://actual-user:' + 'different-password@database.example";' : '');
+  const oid = 'a'.repeat(40);
+  const git = (...args) => {
+    if (args[0] === 'rev-list') return oid;
+    if (args[0] === 'ls-tree') return `100644 blob ${oid}\t${path}\0`;
+    if (args[1] === '-s') return String(Buffer.byteLength(content));
+    if (args[1] === '-p') return content;
+    throw new Error('Unexpected scanner operation');
+  };
+  if (scenario === 'historical-seo-fixture') assert.deepEqual(scanOutgoing('base', 'head', policy, git), { commits: 1, blobs: 1 });
+  else assert.throws(() => scanOutgoing('base', 'head', policy, git), /Potential credential/);
+});
+
 function fixture(releaseConfig = { ...policy, enabled: false }) {
   const dir = mkdtempSync(join(tmpdir(), 'aven-release-test-'));
   const root = join(dir, 'work'), remote = join(dir, 'remote.git'); mkdirSync(root);

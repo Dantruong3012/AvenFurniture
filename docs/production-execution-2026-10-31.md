@@ -51,6 +51,39 @@ Vercel runtime-error MCP returned 403. Its mapped same-project/team CLI fallback
 
 Local source fix commit: `fa02eb8` (`fix(release): handle sitemap outages and production canonical URLs`). This commit is not pushed or deployed. The full tested release candidate will include all existing development work since main, not just this fix; the draft PR must disclose that wider scope and its unapproved schema prerequisites.
 
+### Historical-fixture scan correction
+
+The outgoing-history scan detected the deliberate invalid-origin test URL (dummy user/password on reserved example.test) in the new SEO test. Existing real-credential patterns were retained; the established exact path/value fixture mechanism was extended only for this harmless literal in `tests/production-seo.test.mjs`. Negative tests prove the same literal in another file and any additional credential are still rejected. Git history was preserved. All **165** runner tests passed after this change, along with lint; the outgoing scan then passed all six already-created commits and 563 distinct path/blobs. This correction does not modify coordinator receipts, review/merge/deployment authorization or the deferred Email tasks.
+
+## Owner Resume confirmed; fresh active-database audit
+
+The owner subsequently confirmed completing Resume in Dashboard. A fresh project GET returned `ACTIVE_HEALTHY`, and the supported read-only SQL endpoint returned HTTP 201. The role is `supabase_read_only_user` with RLS-bypass read permission, so the following aggregate counts are not merely anonymous filtered results: products 0 (published 0), staff profiles 3, Auth accounts 3, inquiries 0. No customer profile/cart/wishlist tables exist yet. `cron.job` is absent. No account records or credentials were logged and no data was changed.
+
+Five applied migrations are freshly verified through `20261015085103_phase2_media_catalog`. All current public tables have RLS enabled. Public/private PostgREST read/grant checks, public consultant RPC, anonymous session-RPC denial and malformed JWT rejection passed without writes. The existing `get_admin_session_context` and `list_public_consultants` grants were read; `submit_customer_inquiry` is absent. These are live baseline checks, not proof of the candidate's still-missing schema.
+
+The exact pending local files are:
+
+1. `20261016103000_inquiry_transaction.sql`
+2. `20261017163000_inquiry_change_events.sql`
+3. `20261017180000_newsletter_data_policy.sql`
+4. `20261017193000_staff_auth_policy.sql`
+5. `20261017210000_staff_invite_lifecycle.sql`
+6. `20261017223000_staff_role_status_safeguards.sql`
+7. `20261017230000_customer_identity_policy.sql`
+8. `20261017233000_staff_deletion_policy.sql`
+9. `20261018000000_customer_cart_items.sql`
+10. `20261018010000_customer_wishlist_items.sql`
+
+These include sensitive Auth/RLS/schema changes and existing outbox/event/newsletter schema dependencies. They do not introduce a provider or scheduled email dispatcher. No migration is authorized or applied. Backup inventory remains permission-denied and no protected database connection/dump credential is configured, so a verified pre-migration backup/restore rehearsal is still missing. The pending set and hashes must be bound to a separate approval after that prerequisite is met.
+
+Public Auth settings confirm public signup remains disabled. Auth configuration reads show `site_url=http://localhost:3000` and `uri_allow_list=http://localhost:3000/auth/confirm`; JWT lifetime is 900 seconds and refresh-token rotation/MFA TOTP are enabled. Provider session timebox/inactivity fields are 0; SQL app-session guards remain a separate enforcement layer to validate before release. No Auth setting was changed, and no reset/login/signup email or live authenticated action was triggered.
+
+### Proposed configuration changes — not yet approved
+
+- Supabase Auth PATCH `/v1/projects/eofdtqnnqgxaoykcbfrv/config/auth`: set only `site_url` to `https://aven-furniture.vercel.app`, and `uri_allow_list` to `https://aven-furniture.vercel.app/auth/confirm,http://localhost:3000/auth/confirm`. Preserve the existing local callback; add no wildcard Preview callback, signup/provider/SMTP change. This corrects Production redirects for future existing Auth flows, and sends no email itself. Save/read back only those two fields. If validation fails, stop and request approval before reverting their recorded old values.
+- Vercel project `prj_PyRDr0N6RUnKTeKWaum17vWfkmkY`, team `team_TNVd8B1HyqiU94SchwMOUvBO`: add non-secret `NEXT_PUBLIC_SITE_URL=https://aven-furniture.vercel.app` for **Production only**, conditional on it remaining absent. This is required by the existing password-recovery action and makes canonical config explicit. No privileged value/target change or redeploy is included. The running SHA stays `7454ca2eacb6185ca3611159d80c0aadf1cd9cd1`; the env addition takes effect on a later separately approved Production build. Preserve the previous absent state for a separately approved removal if needed.
+- GitHub `main`: require all six checks bound to verified GitHub Actions App ID 15368, strict up-to-date checks, one independent human review, stale-review dismissal, admin enforcement and conversation resolution; prohibit force push/deletion/review bypass, permit merge commits and disable auto-merge. No merge/deploy is included. The actor is authenticated as Dantruong3012 with repository admin role, but token-specific write scopes must still be verified by the authorized API operation. The token is stored mode 600 outside the checkout and is never included in logs.
+
 ## Migration, backup and recovery preparation
 
 There are 15 local SQL migrations. Their SQL/RLS behavior passes the disposable PGlite suites; the inquiry transaction, staff Auth/lifecycle, customer identity/cart/wishlist, and media/catalog migrations remain compatibility dependencies for this source. Exact **currently missing** migrations cannot be selected until a fresh live migration history/schema/RPC read succeeds. Historical reports are insufficient. No SQL file was changed and no Production migration was executed. Existing event/outbox schema is preserved; no Email adapter, scheduler or retry activation is in scope.
