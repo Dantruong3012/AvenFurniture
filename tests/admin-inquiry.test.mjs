@@ -182,7 +182,13 @@ test("repository offers active staff only after an authenticated inquiry read", 
   assert.deepEqual(await inactive.listActiveInquiryStaff(), []);
 });
 
-test("repository assigns and unassigns through an authenticated atomic RPC", async () => {
+test("repository assigns and unassigns through an authenticated atomic RPC", async (context) => {
+  const previous = process.env.NEXT_PUBLIC_SITE_URL;
+  process.env.NEXT_PUBLIC_SITE_URL = "https://studio.example.test";
+  context.after(() => {
+    if (previous === undefined) delete process.env.NEXT_PUBLIC_SITE_URL;
+    else process.env.NEXT_PUBLIC_SITE_URL = previous;
+  });
   const fixture = inquiryRepositoryFixture();
   assert.equal(await fixture.isActiveInquiryStaff(otherId), true);
   await fixture.updateAdminInquiryAssignment(fixture.authenticated, id, id, otherId);
@@ -191,7 +197,7 @@ test("repository assigns and unassigns through an authenticated atomic RPC", asy
   assert.equal(fixture.getAssignee(), null);
   const updates = fixture.requests.filter((request) => request.url.pathname.endsWith("/rpc/change_inquiry_assignment"));
   assert.deepEqual(updates.map((request) => request.body), [
-    { p_id: id, p_assignee_id: otherId, p_admin_url: `http://localhost:3000/admin/inquiries?inquiry=${id}` },
+    { p_id: id, p_assignee_id: otherId, p_admin_url: `https://studio.example.test/admin/inquiries?inquiry=${id}` },
     { p_id: id, p_assignee_id: null, p_admin_url: null },
   ]);
   assert.ok(updates.every((request) => request.kind === "authenticated"));
