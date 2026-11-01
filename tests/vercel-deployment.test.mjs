@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import ts from "typescript";
-import { loadModule } from "./helpers/load-module.mjs";
+import { loadModule, i18nModule } from "./helpers/load-module.mjs";
 
 const { normalizeDeploymentState, observeProductionDeployment } = loadModule("lib/vercel/deployment.ts");
 const boundarySource = readFileSync(new URL("../components/ui/error-boundary.tsx", import.meta.url), "utf8");
@@ -13,7 +13,7 @@ const boundaryCode = ts.transpileModule(boundarySource, {
 class TestComponent {}
 const boundaryModule = { exports: {} };
 new Function("require", "module", "exports", boundaryCode)(
-  (name) => name === "react" ? { Component: TestComponent } : name === "react/jsx-runtime" ? { jsx: () => null, jsxs: () => null } : createRequire(import.meta.url)(name),
+  (name) => name === "react" ? { Component: TestComponent } : name === "react/jsx-runtime" ? { jsx: () => null, jsxs: () => null } : i18nModule(name) ?? createRequire(import.meta.url)(name),
   boundaryModule,
   boundaryModule.exports,
 );

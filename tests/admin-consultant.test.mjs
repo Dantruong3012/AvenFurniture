@@ -1,12 +1,12 @@
+import { renderAsyncMarkup } from "./helpers/render-async.mjs";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { test } from "node:test";
 import { createClient } from "@supabase/supabase-js";
 import React from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 import ts from "typescript";
-import { loadModule } from "./helpers/load-module.mjs";
+import { loadModule, i18nModule } from "./helpers/load-module.mjs";
 
 const id = "00000000-0000-4000-8000-000000000001";
 const otherId = "00000000-0000-4000-8000-000000000002";
@@ -183,6 +183,8 @@ function loadTsx(filename, overrides = {}) {
   const loaded = { exports: {} };
   new Function("require", "module", "exports", code)((name) => {
     if (name in overrides) return overrides[name];
+    const localeFixture = i18nModule(name);
+    if (localeFixture) return localeFixture;
     if (name.startsWith("@/components/")) return loadTsx(`${name.slice(2)}.tsx`, overrides);
     return nativeRequire(name);
   }, loaded, loaded.exports);
@@ -190,24 +192,24 @@ function loadTsx(filename, overrides = {}) {
 }
 const Link = ({ children, ...props }) => React.createElement("a", props, children);
 const ui = { "next/link": { default: Link }, "@/lib/consultants/actions": { saveConsultant: async () => ({}), deleteConsultant: async () => ({}) } };
-const markup = (Component, props) => renderToStaticMarkup(React.createElement(Component, props));
+const markup = (Component, props) => renderAsyncMarkup(React.createElement(Component, props));
 
-test("admin management renders escaped profiles, inactive visibility, empty and missing states, and existing-member creation", () => {
+test("admin management renders escaped profiles, inactive visibility, empty and missing states, and existing-member creation", async () => {
   const { ConsultantManagement } = loadTsx("components/admin/consultant-management.tsx", ui);
   const props = { profiles: [profile], members, saved: false, deleted: false };
-  const html = markup(ConsultantManagement, props);
+  const html = await markup(ConsultantManagement, props);
   assert.match(html, /Linh &lt;script&gt;/);
   assert.match(html, /Visible/);
   assert.match(html, new RegExp(`href="/admin/consultants\\?edit=${id}"`));
-  assert.match(markup(ConsultantManagement, { ...props, members: members.map((m) => ({ ...m, active: false })) }), /Hidden \(inactive account\)/);
-  assert.match(markup(ConsultantManagement, { ...props, profiles: [] }), /No consultant profiles yet/);
-  assert.match(markup(ConsultantManagement, { ...props, edit: "missing" }), /role="alert"/);
-  const create = markup(ConsultantManagement, { ...props, edit: "new" });
+  assert.match(await markup(ConsultantManagement, { ...props, members: members.map((m) => ({ ...m, active: false })) }), /Hidden \(inactive account\)/);
+  assert.match(await markup(ConsultantManagement, { ...props, profiles: [] }), /No consultant profiles yet/);
+  assert.match(await markup(ConsultantManagement, { ...props, edit: "missing" }), /role="alert"/);
+  const create = await markup(ConsultantManagement, { ...props, edit: "new" });
   assert.match(create, new RegExp(`<option value="${otherId}">An \\(inactive\\)`));
   assert.doesNotMatch(create, new RegExp(`<option value="${id}"`));
   assert.match(create, /name="mode" value="create"/);
   assert.doesNotMatch(create, /name="enabled"[^>]*checked/);
-  const edit = markup(ConsultantManagement, { ...props, edit: id, saved: true });
+  const edit = await markup(ConsultantManagement, { ...props, edit: id, saved: true });
   assert.match(edit, /Consultant saved/);
   assert.match(edit, /name="mode" value="update"/);
   assert.match(edit, /name="updated_at"/);
@@ -225,8 +227,8 @@ test("admin page forwards scalar selection, preserves auth errors and restricts 
   const rejected = loadTsx("app/admin/(protected)/consultants/page.tsx", { ...overrides, "@/lib/consultants/queries": { readAdminConsultants: async () => { throw new Error("redirect:/admin/access-denied"); } } }).default;
   await assert.rejects(rejected({ searchParams: Promise.resolve({}) }), /redirect:/);
   const { CatalogShell } = loadTsx("components/admin/catalog-shell.tsx", { ...ui, "next/navigation": { usePathname: () => "/admin/consultants" }, "@/lib/auth/actions": { signOut: async () => {} } });
-  assert.match(markup(CatalogShell, { name: "Admin", role: "super_admin" }), /href="\/admin\/consultants" aria-current="page"/);
-  assert.doesNotMatch(markup(CatalogShell, { name: "Staff", role: "staff" }), /href="\/admin\/consultants"/);
+  assert.match(await markup(CatalogShell, { name: "Admin", role: "super_admin" }), /href="\/admin\/consultants" aria-current="page"/);
+  assert.doesNotMatch(await markup(CatalogShell, { name: "Staff", role: "staff" }), /href="\/admin\/consultants"/);
 });
 
 function nodes(tree, predicate) {

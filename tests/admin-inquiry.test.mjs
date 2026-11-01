@@ -1,12 +1,12 @@
+import { renderAsyncMarkup } from "./helpers/render-async.mjs";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { test } from "node:test";
 import { createClient } from "@supabase/supabase-js";
 import React from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 import ts from "typescript";
-import { loadModule } from "./helpers/load-module.mjs";
+import { loadModule, i18nModule } from "./helpers/load-module.mjs";
 
 const id = "00000000-0000-4000-8000-000000000001";
 const otherId = "00000000-0000-4000-8000-000000000002";
@@ -227,6 +227,8 @@ function loadTsx(filename, overrides, globals = {}) {
   const loaded = { exports: {} };
   new Function("require", "module", "exports", ...Object.keys(globals), code)((name) => {
     if (name in overrides) return overrides[name];
+    const localeFixture = i18nModule(name);
+    if (localeFixture) return localeFixture;
     return nativeRequire(name);
   }, loaded, loaded.exports, ...Object.values(globals));
   return loaded.exports;
@@ -262,7 +264,7 @@ test("inquiry page authorizes before reads and forwards validated paging, filter
   calls.length = 0;
   const invalid = await page({ searchParams: Promise.resolve({ inquiry: "bad" }) });
   assert.deepEqual(calls, ["auth"]);
-  assert.match(renderToStaticMarkup(invalid), /Invalid inquiry filters/);
+  assert.match(await renderAsyncMarkup(invalid), /Invalid inquiry filters/);
   calls.length = 0;
   await page({ searchParams: Promise.resolve({}) });
   assert.equal(calls.length, 2, "no detail query until a row is selected");
@@ -280,7 +282,31 @@ test("inquiry page preserves the authentication redirect without issuing reads",
   await assert.rejects(page({ searchParams: Promise.resolve({}) }), (error) => error === redirect);
 });
 
-test("portal renders contact data, encoded navigation, status controls, verbatim safe content and empty states", () => {
+test("Vietnamese admin translates controls while keeping selected status, IDs and customer content intact", async () => {
+  const { InquiryPortal } = loadTsx("components/admin/inquiry-portal.tsx", {
+    "next/link": { default: Link },
+    "next/navigation": { useRouter: () => ({ replace() {} }) },
+    "@/lib/i18n/client": i18nModule("@/lib/i18n/client", "vi"),
+    "@/components/ui/icons": { CloseIcon: () => null, SearchIcon: () => null },
+    "@/lib/inquiries/actions": { changeInquiryStatus: async () => ({}), changeInquiryAssignment: async () => ({}), createInquiryNote: async () => ({}), getActiveInquiryStaff: async () => [] },
+    "@/lib/validation/inquiry": loadModule("lib/validation/inquiry.ts"),
+  });
+  const html = await renderAsyncMarkup(React.createElement(InquiryPortal, {
+    inquiries: [summary], count: 1, pageSize: 25,
+    filters: { page: 1, status: "new", q: "", inquiry: id }, detail, currentUserId: id,
+  }));
+  assert.match(html, /Khách hàng|Yêu cầu/);
+  assert.match(html, /Cập nhật trạng thái/);
+  assert.match(html, /<select id="inquiry-status" name="status"[^>]*><option value="new" selected="">Mới/);
+  assert.match(html, /value="consulting">Đang tư vấn/);
+  assert.match(html, /name="id" value="00000000-0000-4000-8000-000000000001"/);
+  assert.match(html, /Customer &lt;script&gt;/);
+  assert.match(html, /Oak chair/);
+  assert.match(html, /  Verbatim\n&lt;script&gt;alert\(1\)&lt;\/script&gt;  /);
+  assert.match(html, /  Internal\n&lt;script&gt;note&lt;\/script&gt;  /);
+});
+
+test("portal renders contact data, encoded navigation, status controls, verbatim safe content and empty states", async () => {
   const { InquiryPortal } = loadTsx("components/admin/inquiry-portal.tsx", {
     "next/link": { default: Link },
     "next/navigation": { useRouter: () => ({ replace() {} }) },
@@ -289,7 +315,7 @@ test("portal renders contact data, encoded navigation, status controls, verbatim
     "@/lib/validation/inquiry": loadModule("lib/validation/inquiry.ts"),
   });
   const props = { inquiries: [summary], count: 60, pageSize: 25, filters: { page: 2, status: "new", q: "a&b" }, detail: null, currentUserId: id };
-  const html = renderToStaticMarkup(React.createElement(InquiryPortal, props));
+  const html = await renderAsyncMarkup(React.createElement(InquiryPortal, props));
   assert.match(html, /Customer &lt;script&gt;/);
   for (const text of ["0901234567", "customer@example.com", "cart", "#42", "Page 2 of 3"]) assert.ok(html.includes(text));
   assert.match(html, /status=new&amp;page=1&amp;q=a%26b/);
@@ -297,7 +323,7 @@ test("portal renders contact data, encoded navigation, status controls, verbatim
   assert.match(html, /status=completed&amp;page=1&amp;q=a%26b/);
   assert.match(html, /aria-current="page">New/);
   assert.match(html, new RegExp(`inquiry=${id}`));
-  const opened = renderToStaticMarkup(React.createElement(InquiryPortal, { ...props, filters: { ...props.filters, inquiry: id }, detail: { ...detail, assignee_id: otherId } }));
+  const opened = await renderAsyncMarkup(React.createElement(InquiryPortal, { ...props, filters: { ...props.filters, inquiry: id }, detail: { ...detail, assignee_id: otherId } }));
   assert.match(opened, /<dialog[^>]*aria-labelledby="inquiry-detail-title"/);
   assert.match(opened, /  Verbatim\n&lt;script&gt;alert\(1\)&lt;\/script&gt;  /);
   assert.match(opened, /  Internal\n&lt;script&gt;note&lt;\/script&gt;  /);
@@ -310,7 +336,7 @@ test("portal renders contact data, encoded navigation, status controls, verbatim
   assert.match(opened, /value="">Unassigned/);
   for (const status of ["new", "consulting", "completed", "cancelled"]) assert.ok(opened.includes(`value="${status}"`));
   assert.doesNotMatch(opened, /<script>(?:alert\(1\)|note)<\/script>/);
-  const missing = renderToStaticMarkup(React.createElement(InquiryPortal, { ...props, inquiries: [], count: 0, filters: { ...props.filters, inquiry: id } }));
+  const missing = await renderAsyncMarkup(React.createElement(InquiryPortal, { ...props, inquiries: [], count: 0, filters: { ...props.filters, inquiry: id } }));
   assert.match(missing, /No inquiries found/);
   assert.match(missing, /Inquiry unavailable/);
   assert.doesNotMatch(missing, /Add an internal note/);
@@ -362,7 +388,7 @@ test("drawer opens modally, restores focus, protects pending changes and preserv
   await new Promise(setImmediate);
   rendered = render();
   assert.equal(nodes(rendered, (node) => node.type === "select" && node.props.name === "assignedTo")[0].props.disabled, false);
-  assert.match(renderToStaticMarkup(nodes(rendered, (node) => node.type === "select" && node.props.name === "assignedTo")[0]), /Staff &lt;script&gt;/);
+  assert.match(await renderAsyncMarkup(nodes(rendered, (node) => node.type === "select" && node.props.name === "assignedTo")[0]), /Staff &lt;script&gt;/);
   const assignmentForm = nodes(rendered, (node) => node.type === "form")[1];
   await assignmentForm.props.action(form({ id, assignedTo: otherId }));
   await assignmentForm.props.action(form({ id, assignedTo: "" }));
@@ -401,13 +427,13 @@ test("drawer opens modally, restores focus, protects pending changes and preserv
   assert.equal(search.focused, true, "focus falls back to search if status filtering removed the trigger row");
 });
 
-test("staff shell exposes the inquiries route with an active navigation state", () => {
+test("staff shell exposes the inquiries route with an active navigation state", async () => {
   const { CatalogShell } = loadTsx("components/admin/catalog-shell.tsx", {
     "next/link": { default: Link },
     "next/navigation": { usePathname: () => "/admin/inquiries" },
     "@/lib/auth/actions": { signOut: async () => {} },
   });
-  const html = renderToStaticMarkup(React.createElement(CatalogShell, { role: "staff", name: "Staff" }, "Portal"));
+  const html = await renderAsyncMarkup(React.createElement(CatalogShell, { role: "staff", name: "Staff" }, "Portal"));
   assert.match(html, /href="\/admin\/inquiries" aria-current="page"/);
   assert.match(html, /Customer requests/);
 });

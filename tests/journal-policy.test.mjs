@@ -1,10 +1,10 @@
+import { renderAsyncMarkup } from "./helpers/render-async.mjs";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { loadModule } from "./helpers/load-module.mjs";
+import { loadModule, i18nModule } from "./helpers/load-module.mjs";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { renderToStaticMarkup } from "react-dom/server";
 import React from "react";
 import ts from "typescript";
 
@@ -15,7 +15,7 @@ function loadView(filename, overrides = {}) {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX },
   }).outputText;
   const loaded = { exports: {} };
-  const require = (name) => name in overrides ? overrides[name] : nativeRequire(name);
+  const require = (name) => name in overrides ? overrides[name] : i18nModule(name) ?? nativeRequire(name);
   new Function("require", "module", "exports", code)(require, loaded, loaded.exports);
   return loaded.exports;
 }
@@ -137,9 +137,10 @@ test("listing and article metadata describe published content", async () => {
     "@/components/journal/article-card": { ArticleCard() {} },
     "@/lib/journal/articles": journal,
   });
-  assert.equal(listing.metadata.alternates.canonical, "/journal");
-  assert.equal(listing.metadata.openGraph.type, "website");
-  assert.equal(listing.metadata.twitter.card, "summary_large_image");
+  const listingMetadata = await listing.generateMetadata();
+  assert.equal(listingMetadata.alternates.canonical, "/journal");
+  assert.equal(listingMetadata.openGraph.type, "website");
+  assert.equal(listingMetadata.twitter.card, "summary_large_image");
 
   const detail = loadView("app/journal/[slug]/page.tsx", {
     "next/navigation": { notFound() { throw new Error("Not found"); } },
@@ -174,14 +175,14 @@ test("sitemap includes the listing and each published article", async () => {
   }
 });
 
-test("article cards show publication details and detail pages lead to the Zalo consultant directory", () => {
+test("article cards show publication details and detail pages lead to the Zalo consultant directory", async () => {
   const article = journal.listJournalArticles()[0];
   const viewImports = {
     "next/image": { __esModule: true, default: ({ alt }) => React.createElement("img", { alt }) },
     "next/link": { __esModule: true, default: ({ href, children, ...props }) => React.createElement("a", { href, ...props }, children) },
   };
   const { ArticleCard } = loadView("components/journal/article-card.tsx", viewImports);
-  const card = renderToStaticMarkup(React.createElement(ArticleCard, { article }));
+  const card = await renderAsyncMarkup(React.createElement(ArticleCard, { article }));
   assert.match(card, new RegExp(article.frontmatter.title));
   assert.match(card, new RegExp(article.frontmatter.excerpt));
   assert.match(card, /<time dateTime="2026-10-01"/);
@@ -193,16 +194,16 @@ test("article cards show publication details and detail pages lead to the Zalo c
     ...viewImports,
     "./markdown-renderer": loadView("components/journal/markdown-renderer.tsx"),
   });
-  const detail = renderToStaticMarkup(React.createElement(ArticleDetail, { article }));
+  const detail = await renderAsyncMarkup(React.createElement(ArticleDetail, { article }));
   assert.match(detail, /min read/);
   assert.match(detail, /Reviewed by AvenFurniture editorial team/);
   assert.match(detail, /href="\/consultants"/);
   assert.match(detail, /Find a consultant on Zalo/);
 });
 
-test("Markdown renders supported blocks and escapes HTML and unsafe links", () => {
+test("Markdown renders supported blocks and escapes HTML and unsafe links", async () => {
   const { MarkdownRenderer } = loadView("components/journal/markdown-renderer.tsx");
-  const html = renderToStaticMarkup(React.createElement(MarkdownRenderer, { source: "## Heading\n\n- First\n- Second\n\n1. One\n2. Two\n\n> Quoted\n\n```js\n<script>alert(1)</script>\n```\n\n[Safe](/consultants) [External](https://example.com) [Unsafe](javascript:alert) <img src=x onerror=alert(1)>" }));
+  const html = await renderAsyncMarkup(React.createElement(MarkdownRenderer, { source: "## Heading\n\n- First\n- Second\n\n1. One\n2. Two\n\n> Quoted\n\n```js\n<script>alert(1)</script>\n```\n\n[Safe](/consultants) [External](https://example.com) [Unsafe](javascript:alert) <img src=x onerror=alert(1)>" }));
   assert.match(html, /<h2/);
   assert.match(html, /<ul/);
   assert.match(html, /<ol/);

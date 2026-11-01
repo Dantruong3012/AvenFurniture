@@ -1,11 +1,11 @@
+import { renderAsyncMarkup } from "./helpers/render-async.mjs";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import React from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 import ts from "typescript";
-import { loadModule } from "./helpers/load-module.mjs";
+import { loadModule, i18nModule } from "./helpers/load-module.mjs";
 
 const validation = loadModule("lib/validation/consultant.ts");
 const { zaloContactUrl, consultantAvatarUrl, validateConsultant } = validation;
@@ -66,6 +66,8 @@ function loadTsx(filename, overrides = {}) {
   const loaded = { exports: {} };
   new Function("require", "module", "exports", code)((name) => {
     if (name in overrides) return overrides[name];
+    const localeFixture = i18nModule(name);
+    if (localeFixture) return localeFixture;
     if (name.startsWith("@/components/")) return loadTsx(`${name.slice(2)}.tsx`, overrides);
     if (name.startsWith("@/lib/")) return loadModule(`${name.slice(2)}.ts`, overrides);
     return nativeRequire(name);
@@ -77,20 +79,20 @@ const Image = ({ unoptimized, priority, ...props }) => { void unoptimized; void 
 const ui = { "next/link": { default: Link }, "next/image": { default: Image } };
 const consultant = { public_name: "Linh <script>", avatar_url: null, zalo_phone: "+84901234567", sort_order: 0 };
 
-test("directory cards render safe names, portrait fallback, validated contact and empty state", () => {
+test("directory cards render safe names, portrait fallback, validated contact and empty state", async () => {
   const { ConsultantGrid } = loadTsx("components/consultant/consultant-grid.tsx", ui);
-  const html = renderToStaticMarkup(React.createElement(ConsultantGrid, { consultants: [consultant] }));
+  const html = await renderAsyncMarkup(React.createElement(ConsultantGrid, { consultants: [consultant] }));
   assert.match(html, /Linh &lt;script&gt;/);
   assert.match(html, /href="https:\/\/zalo.me\/84901234567"/);
   assert.match(html, /target="_blank" rel="noopener noreferrer"/);
   assert.match(html, /aria-label="Contact Linh &lt;script&gt; on Zalo \(opens in a new tab\)"/);
   assert.doesNotMatch(html, /<img|<script>/);
   const avatar = "https://res.cloudinary.com/aven/image/upload/avatar.jpg";
-  const portrait = renderToStaticMarkup(React.createElement(ConsultantGrid, { consultants: [{ ...consultant, avatar_url: avatar, zalo_phone: "bad?redirect=evil" }] }));
+  const portrait = await renderAsyncMarkup(React.createElement(ConsultantGrid, { consultants: [{ ...consultant, avatar_url: avatar, zalo_phone: "bad?redirect=evil" }] }));
   assert.match(portrait, /<img[^>]+alt="Portrait of Linh &lt;script&gt;"/);
   assert.match(portrait, /Zalo contact unavailable/);
   assert.doesNotMatch(portrait, /href="https:\/\/zalo.me/);
-  const empty = renderToStaticMarkup(React.createElement(ConsultantGrid, { consultants: [] }));
+  const empty = await renderAsyncMarkup(React.createElement(ConsultantGrid, { consultants: [] }));
   assert.match(empty, /No consultants are listed right now/);
   assert.match(empty, /href="\/contact"/);
 });
@@ -99,15 +101,15 @@ test("public page loads directory at request time and distinguishes empty from q
   for (const result of [[consultant], [], new Error("secret database error")]) {
     const page = loadTsx("app/consultants/page.tsx", { ...ui, "@/lib/consultants/queries": { readPublicConsultants: async () => { if (result instanceof Error) throw result; return result; } } });
     assert.equal(page.dynamic, "force-dynamic");
-    const html = renderToStaticMarkup(await page.default());
+    const html = await renderAsyncMarkup(await page.default());
     assert.match(html, result instanceof Error ? /directory is temporarily unavailable/ : result.length ? /Chat on Zalo/ : /No consultants are listed/);
     assert.doesNotMatch(html, /secret database error/);
   }
 });
 
-test("storefront navigation exposes consultants on desktop and mobile", () => {
+test("storefront navigation exposes consultants on desktop and mobile", async () => {
   const { Header } = loadTsx("components/layout/header.tsx", { ...ui, "next/navigation": { usePathname: () => "/consultants" }, "@/components/store/store-provider": { useStore: () => ({ cart: [], wishlist: [] }) } });
-  const html = renderToStaticMarkup(React.createElement(Header));
+  const html = await renderAsyncMarkup(React.createElement(Header));
   assert.equal((html.match(/href="\/consultants"/g) ?? []).length, 2);
   assert.match(html, /href="\/consultants" class="active"/);
 });

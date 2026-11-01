@@ -3,6 +3,8 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode, type RefObject } from "react";
 import { validateCustomerInquiryInput, type CustomerInquiryInput, type InquiryItemInput } from "@/lib/validation/inquiry";
 import type { InquiryConfirmation, StorefrontInquirySource } from "@/lib/types";
+import { useI18n } from "@/lib/i18n/client";
+
 
 type InquiryFormProps = {
   source?: StorefrontInquirySource;
@@ -12,6 +14,8 @@ type InquiryFormProps = {
 };
 
 export function ContactForm({ source = "contact", items = [], onSuccess, onPendingChange }: InquiryFormProps) {
+  const { t } = useI18n();
+
   const prefix = useId();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
@@ -78,8 +82,8 @@ export function ContactForm({ source = "contact", items = [], onSuccess, onPendi
   }
 
   if (confirmation) return <div className="inquiry-confirmation" role="status" tabIndex={-1} ref={feedback}>
-    <h3>Thank you for your inquiry.</h3>
-    <p>Your reference is <strong>#{confirmation.reference}</strong>. Our studio will contact you using the details you provided.</p>
+    <h3>{t("Thank you for your inquiry.")}</h3>
+    <p>{t("Your reference is")}{" "}<strong>#{confirmation.reference}</strong>{t(". Our studio will contact you using the details you provided.")}</p>
   </div>;
 
   const fieldProps = (name: string) => ({
@@ -87,25 +91,27 @@ export function ContactForm({ source = "contact", items = [], onSuccess, onPendi
     "aria-invalid": Boolean(fields[name]),
     "aria-describedby": fields[name] ? `${prefix}-${name}-error` : undefined,
   });
-  const fieldError = (name: string) => fields[name] && <span className="inquiry-field-error" id={`${prefix}-${name}-error`}>{fields[name]}</span>;
+  const fieldError = (name: string) => fields[name] && <span className="inquiry-field-error" id={`${prefix}-${name}-error`}>{t(fields[name] ?? "")}</span>;
   return <form className="inquiry-form" onSubmit={submit} noValidate aria-busy={pending}>
-    <p>Name and phone are required. Email and notes are optional.</p>
-    {error && <div className="inquiry-error" role="alert" tabIndex={-1} ref={feedback}><p>{error}</p>{Object.keys(fields).length > 0 && <ul>{Object.entries(fields).map(([name, text]) => <li key={name}>{text}</li>)}</ul>}</div>}
+    <p>{t("Name and phone are required. Email and notes are optional.")}</p>
+    {error && <div className="inquiry-error" role="alert" tabIndex={-1} ref={feedback}><p>{t(error ?? "")}</p>{Object.keys(fields).length > 0 && <ul>{Object.entries(fields).map(([name, text]) => <li key={name}>{t(text)}</li>)}</ul>}</div>}
     <fieldset disabled={pending}>
-      <label htmlFor={`${prefix}-contact_name`}>Your name<input {...fieldProps("contact_name")} autoComplete="name" required maxLength={120}/>{fieldError("contact_name")}</label>
-      <label htmlFor={`${prefix}-contact_phone`}>Phone number<input {...fieldProps("contact_phone")} type="tel" autoComplete="tel" required minLength={6} maxLength={30}/>{fieldError("contact_phone")}</label>
-      <label htmlFor={`${prefix}-contact_email`}>Email (optional)<input {...fieldProps("contact_email")} type="email" autoComplete="email" maxLength={254}/>{fieldError("contact_email")}</label>
-      <label htmlFor={`${prefix}-message`}>Message (optional)<textarea {...fieldProps("message")} rows={4} maxLength={10000}/>{fieldError("message")}</label>
-      <div className="inquiry-honeypot" aria-hidden="true"><label htmlFor={`${prefix}-hp_company`}>Leave this field empty<input id={`${prefix}-hp_company`} name="hp_company" tabIndex={-1} autoComplete="off"/></label></div>
-      <button className="btn btn-primary" type="submit" disabled={pending}>{pending ? "Sending inquiry…" : source === "cart" ? "Send quote request" : "Send inquiry"}</button>
+      <label htmlFor={`${prefix}-contact_name`}>{t("Your name")}<input {...fieldProps("contact_name")} autoComplete="name" required maxLength={120}/>{fieldError("contact_name")}</label>
+      <label htmlFor={`${prefix}-contact_phone`}>{t("Phone number")}<input {...fieldProps("contact_phone")} type="tel" autoComplete="tel" required minLength={6} maxLength={30}/>{fieldError("contact_phone")}</label>
+      <label htmlFor={`${prefix}-contact_email`}>{t("Email (optional)")}<input {...fieldProps("contact_email")} type="email" autoComplete="email" maxLength={254}/>{fieldError("contact_email")}</label>
+      <label htmlFor={`${prefix}-message`}>{t("Message (optional)")}<textarea {...fieldProps("message")} rows={4} maxLength={10000}/>{fieldError("message")}</label>
+      <div className="inquiry-honeypot" aria-hidden="true"><label htmlFor={`${prefix}-hp_company`}>{t("Leave this field empty")}<input id={`${prefix}-hp_company`} name="hp_company" tabIndex={-1} autoComplete="off"/></label></div>
+      <button className="btn btn-primary" type="submit" disabled={pending}>{pending ? t("Sending inquiry…") : source === "cart" ? t("Send quote request") : t("Send inquiry")}</button>
     </fieldset>
-    {pending && <p role="status">Sending your inquiry. Please wait…</p>}
+    {pending && <p role="status">{t("Sending your inquiry. Please wait…")}</p>}
   </form>;
 }
 
 // Native modal dialogs contain keyboard focus, make the background inert, and
 // restore focus to the trigger. Keep children mounted to preserve retry keys.
 export function InquiryDialog({ open, onClose, title, children, pending = false, returnFocusRef }: { open: boolean; onClose: () => void; title: string; children: ReactNode; pending?: boolean; returnFocusRef?: RefObject<HTMLElement | null> }) {
+  const { t } = useI18n();
+
   const dialog = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   useEffect(() => {
@@ -122,7 +128,7 @@ export function InquiryDialog({ open, onClose, title, children, pending = false,
     };
   }, [open, returnFocusRef]);
   return <dialog ref={dialog} className="inquiry-dialog" aria-labelledby={titleId} onCancel={(event) => { event.preventDefault(); if (!pending) onClose(); }}>
-    <div className="inquiry-dialog-heading"><h2 id={titleId}>{title}</h2><button type="button" className="btn btn-secondary" onClick={onClose} disabled={pending} aria-label="Close inquiry">Close</button></div>
+    <div className="inquiry-dialog-heading"><h2 id={titleId}>{title}</h2><button type="button" className="btn btn-secondary" onClick={onClose} disabled={pending} aria-label={t("Close inquiry")}>{t("Close")}</button></div>
     {children}
   </dialog>;
 }

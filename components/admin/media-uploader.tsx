@@ -1,6 +1,8 @@
 "use client";
 import { useRef, useState } from "react";
 import type { Tables } from "@/lib/supabase/database.types";
+import { useI18n } from "@/lib/i18n/client";
+
 type Asset = Tables<"media_assets">;
 type Upload = { id: string; file: File; progress: number; error?: string; done?: boolean; response?: Record<string, unknown> };
 
@@ -35,6 +37,8 @@ async function uploadFile(file: File, onProgress: (value: number) => void, onRes
 }
 
 export function MediaUploader({ onUploaded, maxFiles = Number.POSITIVE_INFINITY }: { onUploaded: (asset: Asset) => void; maxFiles?: number }) {
+  const { t } = useI18n();
+
   const picker = useRef<HTMLInputElement>(null);
   const [uploads, setUploads] = useState<Upload[]>([]);
   const [dragging, setDragging] = useState(false);
@@ -59,7 +63,7 @@ export function MediaUploader({ onUploaded, maxFiles = Number.POSITIVE_INFINITY 
   }
   return <div className={`media-drop ${dragging ? "dragging" : ""}`} onDragOver={(event) => { event.preventDefault(); if (maxFiles > 0) setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={(event) => { event.preventDefault(); setDragging(false); void run(Array.from(event.dataTransfer.files)); }}>
     <input ref={picker} type="file" accept="image/jpeg,image/png,image/webp,image/avif" multiple disabled={maxFiles <= 0} className="sr-only" onChange={(event) => { void run(Array.from(event.target.files || [])); event.target.value = ""; }}/>
-    <p>{maxFiles <= 0 ? "Remove an image before uploading another." : <>Drop images here or <button type="button" className="text-link" onClick={() => picker.current?.click()}>choose files</button></>}</p><small>JPEG, PNG, WebP, AVIF · 10 MB per image{Number.isFinite(maxFiles) ? ` · ${maxFiles} slots remaining` : ""}</small>
-    {uploads.length > 0 && <ul aria-live="polite">{uploads.map((item) => <li key={item.id}>{item.file.name} — {item.done ? "Uploaded" : item.error || `${item.progress}%`}{item.error && <button type="button" onClick={() => void process(item)}>Retry</button>}</li>)}</ul>}
+    <p>{maxFiles <= 0 ? t("Remove an image before uploading another.") : <>{t("Drop images here or")}{" "}<button type="button" className="text-link" onClick={() => picker.current?.click()}>{t("choose files")}</button></>}</p><small>{t("JPEG, PNG, WebP, AVIF · 10 MB per image")}{Number.isFinite(maxFiles) ? t(" · {v0} slots remaining", { v0: maxFiles }) : ""}</small>
+    {uploads.length > 0 && <ul aria-live="polite">{uploads.map((item) => <li key={item.id}>{item.file.name} — {item.done ? t("Uploaded") : item.error || `${item.progress}%`}{item.error && <button type="button" onClick={() => void process(item)}>{t("Retry")}</button>}</li>)}</ul>}
   </div>;
 }

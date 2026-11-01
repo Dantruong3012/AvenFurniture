@@ -82,8 +82,8 @@ export function parseCatalogFilters(params: Record<string, string | string[] | u
     page: Math.min(10000, Math.max(1, Number.parseInt(one("page"), 10) || 1)),
   };
 }
-export function formatCatalogPrice(price: number | null, currency: string) {
+export function formatCatalogPrice(price: number | null, currency: string, locale = "en-US") {
   if (price === null) return "Request a quote";
-  try { return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(price); }
-  catch { return `${currency} ${price.toLocaleString("en-US")}`; }
+  try { return new Intl.NumberFormat(locale, { style: "currency", currency }).format(price); }
+  catch { return `${currency} ${price.toLocaleString(locale)}`; }
 }
