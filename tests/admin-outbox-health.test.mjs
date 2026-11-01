@@ -1,11 +1,11 @@
+import { renderAsyncMarkup } from "./helpers/render-async.mjs";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { test } from "node:test";
 import React from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 import ts from "typescript";
-import { loadModule } from "./helpers/load-module.mjs";
+import { loadModule, i18nModule } from "./helpers/load-module.mjs";
 
 const summary = {
   total: 7, pending: 2, processing: 1, sent: 3, failed: 1,
@@ -56,7 +56,7 @@ function loadTsx(filename, overrides = {}) {
     module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX,
   } }).outputText;
   const loaded = { exports: {} };
-  new Function("require", "module", "exports", code)((name) => name in overrides ? overrides[name] : nativeRequire(name), loaded, loaded.exports);
+  new Function("require", "module", "exports", code)((name) => name in overrides ? overrides[name] : i18nModule(name) ?? nativeRequire(name), loaded, loaded.exports);
   return loaded.exports;
 }
 
@@ -77,7 +77,7 @@ test("protected dashboard renders only counts and no delivery controls", async (
     "@/lib/email/outbox": { getOutboxHealthSummary: async (received) => { calls.push("health"); assert.equal(received, client); return summary; } },
     "@/components/admin/outbox-health-card": { OutboxHealthCard },
   }).default;
-  const html = renderToStaticMarkup(await page());
+  const html = await renderAsyncMarkup(await page());
   assert.equal(calls[0], "auth");
   assert.ok(calls.includes("health"));
   for (const label of ["Outbox health", "Pending", "Processing", "Sent", "Failed / dead letter", "Due for delivery"]) assert.ok(html.includes(label));

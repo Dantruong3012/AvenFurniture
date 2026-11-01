@@ -2,9 +2,13 @@
 import { useMemo, useState } from "react";
 import { MediaUploader } from "./media-uploader";
 import type { Tables } from "@/lib/supabase/database.types";
+import { useI18n } from "@/lib/i18n/client";
+
 type Asset = Tables<"media_assets"> & { usage: number };
 
 export function MediaLibrary({ initial }: { initial: Asset[] }) {
+  const { t } = useI18n();
+
   const [assets, setAssets] = useState(initial);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
@@ -22,7 +26,7 @@ export function MediaLibrary({ initial }: { initial: Asset[] }) {
     finally { setBusy(null); }
   }
   async function remove(id: string) {
-    if (!window.confirm("Delete this unused image from Cloudinary and the media library?")) return;
+    if (!window.confirm(t("Delete this unused image from Cloudinary and the media library?"))) return;
     setBusy(id); setMessage("");
     try {
       const response = await fetch(`/api/admin/media/${id}`, { method: "DELETE" });
@@ -33,21 +37,23 @@ export function MediaLibrary({ initial }: { initial: Asset[] }) {
     finally { setBusy(null); }
   }
   return <><MediaUploader onUploaded={(asset) => setAssets((items) => [{ ...asset, usage: 0 }, ...items])}/>
-    <div className="admin-toolbar"><label><span className="sr-only">Search images</span><input type="search" placeholder="Search images" value={search} onChange={(e) => setSearch(e.target.value)}/></label><label>Usage <select value={filter} onChange={(e) => setFilter(e.target.value)}><option value="all">All images</option><option value="used">Used in products</option><option value="unused">Not used yet</option></select></label></div>
-    {message && <p role="status">{message}</p>}
-    {!visible.length && <div className="empty-state compact"><h2>No images found</h2><p>Upload an image or change your filters.</p></div>}
+    <div className="admin-toolbar"><label><span className="sr-only">{t("Search images")}</span><input type="search" placeholder={t("Search images")} value={search} onChange={(e) => setSearch(e.target.value)}/></label><label>{t("Usage")}{" "}<select value={filter} onChange={(e) => setFilter(e.target.value)}><option value="all">{t("All images")}</option><option value="used">{t("Used in products")}</option><option value="unused">{t("Not used yet")}</option></select></label></div>
+    {message && <p role="status">{t(message)}</p>}
+    {!visible.length && <div className="empty-state compact"><h2>{t("No images found")}</h2><p>{t("Upload an image or change your filters.")}</p></div>}
     <div className="media-grid">{visible.map((asset) => <MediaTile key={asset.id} asset={asset} busy={busy === asset.id} saveAlt={saveAlt} remove={remove}/>)}</div>
   </>;
 }
 function MediaTile({ asset, busy, saveAlt, remove }: { asset: Asset; busy: boolean; saveAlt: (id: string, alt: string) => void; remove: (id: string) => void }) {
+  const { t } = useI18n();
+
   const [alt, setAlt] = useState(asset.alt);
   return <article className="media-tile">
     {/* URLs originate from verified Cloudinary resources. */}
     {/* eslint-disable-next-line @next/next/no-img-element */}
-    <img src={asset.secure_url} alt={asset.alt || "Image awaiting alt text"}/>
-    <p>{asset.width} × {asset.height} · {asset.format.toUpperCase()} · {asset.bytes ? `${(asset.bytes / 1024 / 1024).toFixed(2)} MB` : "Legacy"}</p>
-    <p>{asset.usage} products · {asset.status}</p>
-    <label>Alt text<input value={alt} maxLength={500} onChange={(e) => setAlt(e.target.value)} /></label>
-    <div className="table-actions"><button disabled={busy || alt === asset.alt || asset.status !== "ready"} onClick={() => saveAlt(asset.id, alt)}>Save alt</button><button disabled={busy || asset.usage > 0} onClick={() => remove(asset.id)}>{asset.status === "delete_failed" || asset.status === "deleting" ? "Retry delete" : "Delete"}</button></div>
+    <img src={asset.secure_url} alt={asset.alt || t("Image awaiting alt text")}/>
+    <p>{asset.width} × {asset.height} · {asset.format.toUpperCase()} · {asset.bytes ? t("{v0} MB", { v0: (asset.bytes / 1024 / 1024).toFixed(2) }) : t("Legacy")}</p>
+    <p>{asset.usage}{" "}{t("products ·")}{" "}{t(asset.status)}</p>
+    <label>{t("Alt text")}<input value={alt} maxLength={500} onChange={(e) => setAlt(e.target.value)} /></label>
+    <div className="table-actions"><button disabled={busy || alt === asset.alt || asset.status !== "ready"} onClick={() => saveAlt(asset.id, alt)}>{t("Save alt")}</button><button disabled={busy || asset.usage > 0} onClick={() => remove(asset.id)}>{asset.status === "delete_failed" || asset.status === "deleting" ? t("Retry delete") : t("Delete")}</button></div>
   </article>;
 }

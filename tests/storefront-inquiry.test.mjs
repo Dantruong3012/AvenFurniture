@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { test } from "node:test";
 import ts from "typescript";
-import { loadModule } from "./helpers/load-module.mjs";
+import { loadModule, i18nModule } from "./helpers/load-module.mjs";
 
 const nativeRequire = createRequire(import.meta.url);
 const id = "00000000-0000-4000-8000-000000000001";
@@ -147,6 +147,8 @@ function componentHarness(filename, overrides = {}, globals = {}) {
   const require = (name) => {
     if (name === "react") return react;
     if (name in overrides) return overrides[name];
+    const localeFixture = i18nModule(name);
+    if (localeFixture) return localeFixture;
     if (name.startsWith("@/")) return loadModule(`${name.slice(2)}.ts`);
     return nativeRequire(name);
   };
