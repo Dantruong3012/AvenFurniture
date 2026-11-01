@@ -3,7 +3,9 @@ import { SiteChrome } from "@/components/layout/site-chrome";
 import { siteOrigin } from "@/lib/catalog/site-url";
 import { LocaleProvider } from "@/components/i18n/locale-provider";
 import { getI18n } from "@/lib/i18n/server";
+import { editorialFont, uiFont } from "./fonts";
 import "./globals.css";
+import "./typography.css";
 
 export async function generateMetadata(): Promise<Metadata> {
   const { t } = await getI18n();
@@ -18,5 +20,5 @@ export async function generateMetadata(): Promise<Metadata> {
 
 export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   const { locale } = await getI18n();
-  return <html lang={locale}><body><LocaleProvider initialLocale={locale}><SiteChrome>{children}</SiteChrome></LocaleProvider></body></html>;
+  return <html lang={locale} className={`${uiFont.variable} ${editorialFont.variable}`}><body><LocaleProvider initialLocale={locale}><SiteChrome>{children}</SiteChrome></LocaleProvider></body></html>;
 }

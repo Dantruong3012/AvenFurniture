@@ -226,7 +226,8 @@ test("admin page forwards scalar selection, preserves auth errors and restricts 
   assert.equal((await page({ searchParams: Promise.resolve({ edit: [id], saved: ["1"] }) })).props.edit, undefined);
   const rejected = loadTsx("app/admin/(protected)/consultants/page.tsx", { ...overrides, "@/lib/consultants/queries": { readAdminConsultants: async () => { throw new Error("redirect:/admin/access-denied"); } } }).default;
   await assert.rejects(rejected({ searchParams: Promise.resolve({}) }), /redirect:/);
-  const { CatalogShell } = loadTsx("components/admin/catalog-shell.tsx", { ...ui, "next/navigation": { usePathname: () => "/admin/consultants" }, "@/lib/auth/actions": { signOut: async () => {} } });
+  const language = loadTsx("components/i18n/language-switch.tsx", { "@/lib/i18n/messages": loadModule("lib/i18n/messages.ts") });
+  const { CatalogShell } = loadTsx("components/admin/catalog-shell.tsx", { ...ui, "next/navigation": { usePathname: () => "/admin/consultants" }, "@/lib/auth/actions": { signOut: async () => {} }, "@/components/i18n/language-switch": language });
   assert.match(await markup(CatalogShell, { name: "Admin", role: "super_admin" }), /href="\/admin\/consultants" aria-current="page"/);
   assert.doesNotMatch(await markup(CatalogShell, { name: "Staff", role: "staff" }), /href="\/admin\/consultants"/);
 });

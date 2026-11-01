@@ -1,5 +1,18 @@
 # Workflow state
 
+Active task: vietnamese-typography
+Current phase: APPROVED
+Execution: LOCAL_COMMIT_PREPARATION
+Last completed task: interface-en-vi
+Next task: -
+Blockers: none for local implementation; final staged scan/commit pending; Push/PR requires fresh owner authorization
+Last successful commit: 60985d55de639c7f154947d574737e44f0305eff (base/main last verified; font work uncommitted)
+Production merge commit: 60985d55de639c7f154947d574737e44f0305eff (last verified release; font fix not deployed)
+
+Current handoff: [typography implementation](tasks/vietnamese-typography/IMPLEMENTATION.md) and [Codex technical review](tasks/vietnamese-typography/REVIEW.md). Owner resumed on2026-11-01. Four screenshots visually inspected; menu wishlist/desktop-resize findings fixed. Final258 application/SQL,167 runner and69 E2E PASS; lint/typegen/type/build/security checks recorded. Complete final owned/staged scans and local commit, then request new exact-SHA Push/PR authorization. No remote operation, Antigravity or Orchestrator changes; four Email tasks deferred. Original dirty checkout preserved.
+
+## Previous handoff (retained; superseded by current typography state above)
+
 Active task: interface-en-vi
 Current phase: DONE
 Last completed task: interface-en-vi (local implementation; remote release pending)

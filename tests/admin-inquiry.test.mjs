@@ -428,12 +428,15 @@ test("drawer opens modally, restores focus, protects pending changes and preserv
 });
 
 test("staff shell exposes the inquiries route with an active navigation state", async () => {
+  const language = loadTsx("components/i18n/language-switch.tsx", { "@/lib/i18n/messages": loadModule("lib/i18n/messages.ts") });
   const { CatalogShell } = loadTsx("components/admin/catalog-shell.tsx", {
     "next/link": { default: Link },
     "next/navigation": { usePathname: () => "/admin/inquiries" },
     "@/lib/auth/actions": { signOut: async () => {} },
+    "@/components/i18n/language-switch": language,
   });
   const html = await renderAsyncMarkup(React.createElement(CatalogShell, { role: "staff", name: "Staff" }, "Portal"));
   assert.match(html, /href="\/admin\/inquiries" aria-current="page"/);
   assert.match(html, /Customer requests/);
+  assert.match(html, /class="admin-topbar"[\s\S]*aria-label="Language"/);
 });
