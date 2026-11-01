@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { signOut } from "@/lib/auth/actions";
 import { useI18n } from "@/lib/i18n/client";
+import { LanguageSwitch } from "@/components/i18n/language-switch";
 
 
 const navigation = [
@@ -33,6 +34,6 @@ export function CatalogShell({ children, role, name }: { children: ReactNode; ro
       })}</nav>
       <div className="admin-nav-bottom"><Link href="/">{t("View storefront")}{" "}<span aria-hidden="true">↗</span></Link><form action={signOut}><button type="submit">{t("Sign out")}{" "}<span aria-hidden="true">→</span></button></form></div>
     </aside>
-    <div className="admin-workspace"><div className="admin-topbar"><span>{t("AVENFURNITURE / ADMIN")}</span><span>{role === "super_admin" ? t("Super admin") : t("Staff")}{" "}{t("workspace")}</span></div><div className="admin-main">{children}</div></div>
+    <div className="admin-workspace"><div className="admin-topbar"><span>{t("AVENFURNITURE / ADMIN")}</span><span>{role === "super_admin" ? t("Super admin") : t("Staff")}{" "}{t("workspace")}</span><LanguageSwitch /></div><div className="admin-main">{children}</div></div>
   </div>;
 }

@@ -1,0 +1,48 @@
+{
+  "repository": "https://github.com/google/fonts",
+  "revision": "6c1dbe27dcf7d817d4b62cec033ba77fa8e2a5ec",
+  "conversion": "Lossless WOFF2 compression, no glyph subsetting or outline edits",
+  "fontToolsVersion": "4.60.2",
+  "files": [
+    {
+      "file": "be-vietnam-pro-regular.woff2",
+      "weight": "400",
+      "source": "https://raw.githubusercontent.com/google/fonts/6c1dbe27dcf7d817d4b62cec033ba77fa8e2a5ec/ofl/bevietnampro/BeVietnamPro-Regular.ttf",
+      "sha256": "907ebfa4a4bd967cdcb313b2889655ff9fb90d5fd4f193723aa99142d14a1652",
+      "bytes": 38064,
+      "verifiedVietnameseAndCombiningCodepoints": 112
+    },
+    {
+      "file": "be-vietnam-pro-medium.woff2",
+      "weight": "500",
+      "source": "https://raw.githubusercontent.com/google/fonts/6c1dbe27dcf7d817d4b62cec033ba77fa8e2a5ec/ofl/bevietnampro/BeVietnamPro-Medium.ttf",
+      "sha256": "15a399b6a57023c665fa8aca7f4691d36c512b17cc36f74bd9dc077487ac9ffc",
+      "bytes": 40232,
+      "verifiedVietnameseAndCombiningCodepoints": 112
+    },
+    {
+      "file": "be-vietnam-pro-semibold.woff2",
+      "weight": "600",
+      "source": "https://raw.githubusercontent.com/google/fonts/6c1dbe27dcf7d817d4b62cec033ba77fa8e2a5ec/ofl/bevietnampro/BeVietnamPro-SemiBold.ttf",
+      "sha256": "91329e727900425300269d9402c32e9e020943783fc0b9457f0b7419bef90dbf",
+      "bytes": 40464,
+      "verifiedVietnameseAndCombiningCodepoints": 112
+    },
+    {
+      "file": "be-vietnam-pro-bold.woff2",
+      "weight": "700",
+      "source": "https://raw.githubusercontent.com/google/fonts/6c1dbe27dcf7d817d4b62cec033ba77fa8e2a5ec/ofl/bevietnampro/BeVietnamPro-Bold.ttf",
+      "sha256": "32eb3a183490d280351f9676cc0b8e1725d95090988db57503dc83879b5fe602",
+      "bytes": 41212,
+      "verifiedVietnameseAndCombiningCodepoints": 112
+    },
+    {
+      "file": "lora-variable.woff2",
+      "weight": "400 700",
+      "source": "https://raw.githubusercontent.com/google/fonts/6c1dbe27dcf7d817d4b62cec033ba77fa8e2a5ec/ofl/lora/Lora[wght].ttf",
+      "sha256": "7c514f026f03de1b0fc344c0c0f0df141fcf16b6f9ab672db191908ba740dab6",
+      "bytes": 85096,
+      "verifiedVietnameseAndCombiningCodepoints": 112
+    }
+  ]
+}

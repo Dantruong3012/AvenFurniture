@@ -46,3 +46,4 @@ Only Antigravity adds tasks from a roadmap approved by the user. Each task also 
 | release-pr-ci | P1 | release-pipeline-policy | Codex | BLOCKED | APPROVED | Reconcile dev PR and required CI without automatic merge | fd618db8235cf0a3e3d096d37eea81b94c680aa0 |
 | release-merge-tracking | P2 | release-pr-ci | Codex | BLOCKED | APPROVED | Apply signed merge approval and track exact deployed SHA without autonomous Production deploy | 9065c9e4ba69495b689a4ec430fbb8283e7940c0 |
 | interface-en-vi | P1 | - | Codex | DONE | APPROVED | Owner-requested EN/VI UI including admin; local checks258/167/57 pass; remote release awaits new authorization | 7a09f7b040cd3f3e03af28a4b360dd59875596e8 |
+| vietnamese-typography | P1 | interface-en-vi | Codex | DONE | APPROVED (Codex Solo technical) | Vietnamese font/UI and drawer fixes; visual review,258/167/69 checks and owned/staged scans PASS; local only, Push/PR awaits owner | d2fe02a2a525fb631db34e7e7450604b34dc1370 |

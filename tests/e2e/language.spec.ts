@@ -74,7 +74,7 @@ test("server-rendered HTML uses the locale cookie without executing JavaScript a
     const response = await context.request.get(baseURL! + "/products");
     expect(response.status()).toBe(200);
     const html = await response.text();
-    expect(html).toContain('<html lang="vi">');
+    expect(html).toMatch(/<html\b[^>]*\blang="vi"[^>]*>/);
     expect(html).toContain('<h1>Nội thất cho<br/>cuộc sống tinh tế</h1>');
     expect(html).toContain('<title>Sản phẩm | AvenFurniture</title>');
     expect(html).toContain('aria-label="Ngôn ngữ"');
@@ -82,7 +82,7 @@ test("server-rendered HTML uses the locale cookie without executing JavaScript a
     const english = await context.request.get(baseURL! + "/products");
     expect(english.status()).toBe(200);
     const englishHtml = await english.text();
-    expect(englishHtml).toContain('<html lang="en">');
+    expect(englishHtml).toMatch(/<html\b[^>]*\blang="en"[^>]*>/);
     expect(englishHtml).toContain('<h1>Furniture for<br/>considered living</h1>');
   } finally { await context.close(); }
 });
