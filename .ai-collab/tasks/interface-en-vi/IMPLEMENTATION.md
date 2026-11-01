@@ -1,6 +1,6 @@
 # Implementation: interface-en-vi
 
-Status: VERIFIED_LOCAL / RELEASE_AUTHORIZATION_PENDING
+Status: DONE_LOCAL / RELEASE_AUTHORIZATION_PENDING
 Implementer: Codex, under the owner's explicit Solo / Codex-only instruction.
 
 Implemented persistent EN/VI selection across public, Auth/MFA and admin UI; translated metadata/accessibility labels, validation, status feedback and confirmations; localized date/price display. English remains the default. Product/editorial/customer data stays as entered. No route, API, database, authorization or role contract changed. No dependency, migration, secret/environment/provider change or paid service. Email tasks remain deferred.
@@ -11,6 +11,6 @@ Tests: application/SQL258 PASS, runner167 PASS, Playwright57 PASS (Chromium, Fir
 
 The unit TSX harnesses now supply request/context locale boundaries using the real translator. Async Server Components use React streaming rendering. Existing authorization, XSS, data-contract and repository assertions remain. New coverage catches missing literal/validation translations, placeholder drift, prototype inheritance, unsupported locales, accidental translation of identifiers/form values and Vietnamese admin status selection. E2E covers persistence, form/cart preservation, URL/query/hash, SSR/metadata, anonymous admin redirect and narrow/desktop layouts, with no shared database writes.
 
-Review: see REVIEW.md. Feature commit is identified by Git history for this task; a following documentation receipt records its full SHA. Local approval does not authorize Push/Merge/Production. Baseline main/Production SHA75565b2f1e4267a4beb462fc051c231f2cc4ed4b verified read-only; the previous one-release merge exception is consumed. Fresh CI/Preview and exact-SHA owner release approval are required for this source revision.
+Review: see REVIEW.md. Implementation commit: `7a09f7b040cd3f3e03af28a4b360dd59875596e8`. This documentation receipt changes only task metadata; application code is unchanged. Local approval does not authorize Push/Merge/Production. Baseline main/Production SHA75565b2f1e4267a4beb462fc051c231f2cc4ed4b verified read-only; the previous one-release merge exception is consumed. Fresh CI/Preview and exact-SHA owner release approval are required for this source revision.
 
 Separately authorized admin password update completed against the existing confirmed/active super_admin account. Verified sign-in, server role RPC and revocation of the verification session; password/key never stored in source or receipts. No duplicate account, email delivery, MFA configuration change or other-account update. Private operation evidence is outside this branch; the account password is not part of a source deployment.
