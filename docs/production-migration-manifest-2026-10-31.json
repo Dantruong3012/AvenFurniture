@@ -1,0 +1,127 @@
+{
+  "project": "eofdtqnnqgxaoykcbfrv",
+  "sourceCandidateSha": "4d78b2cd5387a59bfa90db4eca62be61be8adaf3",
+  "baselineVersions": [
+    "20261014080743",
+    "20261014080757",
+    "20261014133618",
+    "20261014134333",
+    "20261015085103"
+  ],
+  "pending": [
+    {
+      "file": "20261016103000_inquiry_transaction.sql",
+      "sha256": "89dc4bbda29d8e17fbd4b5d8a8fc4354376b296bd5f7e0805a856a137d15d45a"
+    },
+    {
+      "file": "20261017163000_inquiry_change_events.sql",
+      "sha256": "995f2530561772fee4718f3a01c77403e1cc1bc06e7dd9a0027b33d7a33b3fb4"
+    },
+    {
+      "file": "20261017180000_newsletter_data_policy.sql",
+      "sha256": "a914da64233c48a2ddd4c107cb526da4e3a1050fd94cbcb080e1f285c7d092a1"
+    },
+    {
+      "file": "20261017193000_staff_auth_policy.sql",
+      "sha256": "c4434fd3b44462143e2e54ac8db918b731a2526a9548e43713c4631158a1c697"
+    },
+    {
+      "file": "20261017210000_staff_invite_lifecycle.sql",
+      "sha256": "31e30251c9ec9ccb1b7716319b035478502b25f1b16ebb3714ee4c8629ccd4bf"
+    },
+    {
+      "file": "20261017223000_staff_role_status_safeguards.sql",
+      "sha256": "3f2f4ea204f9357a101607d7ec27e9159cd5974341eb27819f6fb96a8f19e831"
+    },
+    {
+      "file": "20261017230000_customer_identity_policy.sql",
+      "sha256": "ac65443abdcd1e8d81b0053362edc9e0689eea597c7b9ae20dd3771e07b44bf1"
+    },
+    {
+      "file": "20261017233000_staff_deletion_policy.sql",
+      "sha256": "40730cad1612d688ac92a22a9e1e4a75ba872148529c6e265893858fbfeb05f7"
+    },
+    {
+      "file": "20261018000000_customer_cart_items.sql",
+      "sha256": "e9855cb26e24a03329deb92299ad26afd1eeb4ce5471503921d87cd195a29e3e"
+    },
+    {
+      "file": "20261018010000_customer_wishlist_items.sql",
+      "sha256": "a0b61eac1e9e69efa2b01196d9fd21b83480c748c2ccc3851657d78ec5b2631f"
+    }
+  ],
+  "productionApproval": true,
+  "backupWaiver": true,
+  "executed": true,
+  "backupWaiverDetails": {
+    "approvedBy": "Dantruong3012",
+    "release": "PR #1",
+    "scopeConfirmed": true,
+    "acceptedData": [
+      "3 Auth accounts",
+      "3 identities",
+      "1 MFA factor",
+      "10 sessions",
+      "3 staff profiles",
+      "3 media metadata rows",
+      "1 category",
+      "3 audit logs"
+    ],
+    "acceptedRisk": "Data including Auth/MFA may be unrecoverable after migration failure; owner confirms it can be recreated",
+    "productionMigrationAuthorized": true,
+    "mergeAuthorized": false,
+    "deploymentAuthorized": false
+  },
+  "preparedExecution": {
+    "project": "eofdtqnnqgxaoykcbfrv",
+    "candidateHeadAtPreflight": "eedc8a8990da5e46e981604c21dd667e8ed48c30",
+    "baseShaAtPreflight": "7454ca2eacb6185ca3611159d80c0aadf1cd9cd1",
+    "packetPath": ".ai-collab/.runtime/solo-waiver-release-preflight/production-migrations-reviewed.sql",
+    "packetSha256": "12d5154f2409e9dcecdfc090e5540118df228685d9685fba4740ca6e5ed5bfd0",
+    "transaction": "one atomic transaction, including original SQL and accurate migration history inserts",
+    "lockTimeout": "5s",
+    "statementTimeout": "60s per statement",
+    "executed": true
+  },
+  "execution": {
+    "ownerApprovedExactPacket": true,
+    "packetSha256": "12d5154f2409e9dcecdfc090e5540118df228685d9685fba4740ca6e5ed5bfd0",
+    "receivedAt": "2026-10-31T17:12:26.016Z",
+    "managementSqlHttpStatus": 201,
+    "attempts": 1,
+    "pendingFieldMeaning": "Historical approved batch, now applied; not a list still missing",
+    "pendingAfter": [],
+    "historyCount": 15,
+    "appliedVersions": [
+      "20261014080743",
+      "20261014080757",
+      "20261014133618",
+      "20261014134333",
+      "20261015085103",
+      "20261016103000",
+      "20261017163000",
+      "20261017180000",
+      "20261017193000",
+      "20261017210000",
+      "20261017223000",
+      "20261017230000",
+      "20261017233000",
+      "20261018000000",
+      "20261018010000"
+    ],
+    "postflightVerifiedAt": "2026-10-31T17:15:56.379Z",
+    "schemaCounts": {
+      "tables": 17,
+      "columns": 140,
+      "indexes": 52,
+      "policies": 43,
+      "functions": 30,
+      "constraints": 105
+    },
+    "readOnlyPostflight": true,
+    "allTenSqlHashesMatch": true,
+    "evidenceDirectory": ".ai-collab/.runtime/approved-production-migrations-20261101",
+    "mergeAuthorized": false,
+    "deploymentAuthorized": false
+  }
+}

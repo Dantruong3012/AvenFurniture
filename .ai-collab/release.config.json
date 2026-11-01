@@ -1,0 +1,15 @@
+{
+  "enabled": false,
+  "developmentPushEnabled": true,
+  "releaseMode": "manual",
+  "repository": "Dantruong3012/AvenFurniture",
+  "remote": "origin",
+  "developmentBranch": "dev/aven-autonomous-backlog",
+  "productionBranch": "main",
+  "vercelProjectId": "prj_PyRDr0N6RUnKTeKWaum17vWfkmkY",
+  "vercelTeamId": "team_TNVd8B1HyqiU94SchwMOUvBO",
+  "previewTimeoutMs": 600000,
+  "previewPollIntervalMs": 5000,
+  "timeoutMs": 60000,
+  "maxOutgoingCommits": 1000
+}

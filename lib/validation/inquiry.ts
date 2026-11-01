@@ -1,0 +1,150 @@
+import { uuidPattern } from "./catalog";
+import type { InquiryPortalQuery } from "@/lib/types";
+
+export const inquirySources = ["cart", "product", "contact", "manual"] as const;
+export const inquiryStatuses = ["new", "consulting", "completed", "cancelled"] as const;
+export type InquirySource = typeof inquirySources[number];
+export type InquiryStatus = typeof inquiryStatuses[number];
+
+export type CustomerInquiryLookup = { type: "email"; value: string } | { type: "phone"; value: string };
+
+/** Normalize a single exact-match contact identifier for the public lookup. */
+export function validateCustomerInquiryLookup(value: unknown): CustomerInquiryLookup | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const input = value as Record<string, unknown>;
+  if (input.type !== "email" && input.type !== "phone") return null;
+  if (typeof input.value !== "string" || input.value.length > 254 || input.value.includes("\0")) return null;
+  const normalized = input.value.trim();
+  if (input.type === "email") {
+    const email = normalized.toLowerCase();
+    // Excluding wildcard and filter punctuation keeps the repository match exact.
+    if (email.length < 6 || !/^[a-z0-9.!#$&'*+/=?^_`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+$/.test(email)) return null;
+    return { type: "email", value: email };
+  }
+  if (normalized.length < 6 || normalized.length > 30 || !/^\+?[0-9 ().-]+$/.test(normalized) || !/[0-9]/.test(normalized)) return null;
+  return { type: "phone", value: normalized };
+}
+
+export function validateInquiryNote(body: unknown): string {
+  if (typeof body !== "string" || !body.trim() || body.trim().length > 10000 || body.includes("\0")) {
+    throw new Error("Enter a note of 1–10000 characters.");
+  }
+  return body.trim();
+}
+
+export function validateInquiryAssignment(input: unknown): { inquiryId: string; assignedTo: string | null } {
+  if (!isRecord(input) || typeof input.inquiryId !== "string" || !uuidPattern.test(input.inquiryId)) {
+    throw new Error("Choose a valid inquiry.");
+  }
+  if (input.assignedTo !== null && (typeof input.assignedTo !== "string" || !uuidPattern.test(input.assignedTo))) {
+    throw new Error("Choose a valid staff member or unassign the inquiry.");
+  }
+  return { inquiryId: input.inquiryId, assignedTo: input.assignedTo };
+}
+
+export function parseInquiryPortalQuery(params: Record<string, string | string[] | undefined>): InquiryPortalQuery {
+  const { page = "1", status = "all", q = "", inquiry } = params;
+  if (typeof page !== "string" || !/^[1-9]\d{0,4}$/.test(page) || Number(page) > 10000) throw new Error("Choose a page from 1 to 10000.");
+  if (typeof status !== "string" || (status !== "all" && !inquiryStatuses.includes(status as InquiryStatus))) throw new Error("Choose a valid inquiry status.");
+  if (typeof q !== "string" || q.length > 200 || q.includes("\0")) throw new Error("Enter a search of at most 200 characters.");
+  if (inquiry !== undefined && (typeof inquiry !== "string" || !uuidPattern.test(inquiry))) throw new Error("Choose a valid inquiry.");
+  return { page: Number(page), status: status as InquiryPortalQuery["status"], q: q.trim(), inquiry };
+}
+export type InquiryItemInput = {
+  productId?: string | null;
+  productName: string;
+  productSlug: string;
+  quantity: number;
+  currency: string;
+  unitPrice: number | null;
+};
+export type CustomerInquiryInput = {
+  idempotency_key?: string;
+  contact_name: string;
+  contact_phone: string;
+  contact_email?: string | null;
+  message?: string | null;
+  source: InquirySource;
+  items?: InquiryItemInput[];
+  hp_company?: string;
+};
+export type ValidatedCustomerInquiryInput = {
+  idempotency_key: string;
+  contact_name: string;
+  contact_phone: string;
+  contact_email: string | null;
+  message: string;
+  source: InquirySource;
+  items: InquiryItemInput[];
+};
+export type InquiryValidationResult =
+  | { success: true; data: ValidatedCustomerInquiryInput }
+  | { success: false; error: string; fields: Record<string, string> };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+export function validateCustomerInquiryInput(input: unknown): InquiryValidationResult {
+  if (!isRecord(input)) return { success: false, error: "Enter a valid inquiry.", fields: {} };
+  // Reject unexpected honeypot types too; never coerce objects or arrays to empty text.
+  if (input.hp_company !== undefined && input.hp_company !== "") {
+    return { success: false, error: "Unable to accept this submission.", fields: {} };
+  }
+  const fields: Record<string, string> = {};
+  const text = (record: Record<string, unknown>, key: string, field: string, min: number, max: number, optional = false) => {
+    const raw = record[key];
+    if (optional && (raw === undefined || raw === null)) return "";
+    if (typeof raw !== "string") { fields[field] = "Enter text."; return ""; }
+    const value = raw.trim();
+    if (value.length < min || value.length > max || value.includes("\0")) fields[field] = `Enter ${min}–${max} characters.`;
+    return value;
+  };
+  const contact_name = text(input, "contact_name", "contact_name", 1, 120);
+  const contact_phone = text(input, "contact_phone", "contact_phone", 6, 30);
+  if (!/^\+?[0-9 ().-]+$/.test(contact_phone) || !/[0-9]/.test(contact_phone)) fields.contact_phone = "Enter a valid phone number.";
+  const contact_email = text(input, "contact_email", "contact_email", 0, 254, true) || null;
+  if (contact_email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(contact_email)) fields.contact_email = "Enter a valid email address.";
+  // Preserve the customer's message verbatim, including meaningful whitespace.
+  const message = input.message == null ? "" : input.message;
+  if (typeof message !== "string" || message.length > 10000 || message.includes("\0")) fields.message = "Enter at most 10000 characters.";
+  const source = input.source;
+  if (!inquirySources.includes(source as InquirySource)) fields.source = "Choose a valid inquiry source.";
+  const key = input.idempotency_key;
+  if (key !== undefined && (typeof key !== "string" || !uuidPattern.test(key))) fields.idempotency_key = "Enter a valid submission key.";
+
+  const items: InquiryItemInput[] = [];
+  const rawItems = input.items === undefined ? [] : input.items;
+  if (!Array.isArray(rawItems) || rawItems.length > 100) fields.items = "Provide an array of at most 100 items.";
+  else for (let index = 0; index < rawItems.length; index++) {
+    const item: unknown = rawItems[index];
+    const prefix = `items.${index}`;
+    if (!isRecord(item)) { fields[prefix] = "Enter a valid item."; continue; }
+    const productName = text(item, "productName", `${prefix}.productName`, 1, 200);
+    const productSlug = text(item, "productSlug", `${prefix}.productSlug`, 1, 160);
+    if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(productSlug)) fields[`${prefix}.productSlug`] = "Enter a valid product slug.";
+    const productId = item.productId ?? null;
+    if (productId !== null && (typeof productId !== "string" || !uuidPattern.test(productId))) fields[`${prefix}.productId`] = "Enter a valid product ID.";
+    const { quantity, currency, unitPrice } = item;
+    if (typeof quantity !== "number" || !Number.isInteger(quantity) || quantity < 1 || quantity > 999) fields[`${prefix}.quantity`] = "Enter a quantity from 1 to 999.";
+    if (typeof currency !== "string" || !/^[A-Z]{3}$/.test(currency)) fields[`${prefix}.currency`] = "Use a three-letter uppercase currency code.";
+    // Match numeric(12,2)'s maximum as well as rejecting NaN and Infinity.
+    if (unitPrice !== null && (typeof unitPrice !== "number" || !Number.isFinite(unitPrice) || unitPrice < 0 || unitPrice > 9999999999.99)) fields[`${prefix}.unitPrice`] = "Enter a nonnegative price or null.";
+    items.push({ productId: productId as string | null, productName, productSlug, quantity: quantity as number, currency: currency as string, unitPrice: unitPrice as number | null });
+  }
+  if (Object.keys(fields).length) return { success: false, error: "Check the inquiry fields and try again.", fields };
+  return { success: true, data: {
+    idempotency_key: (key as string | undefined) ?? crypto.randomUUID(),
+    contact_name, contact_phone, contact_email, message: message as string, source: source as InquirySource, items,
+  } };
+}
+
+export function inquiryError(code?: string) {
+  switch (code) {
+    case "22023": case "22P02": case "22003": case "23514": case "23502":
+      return "Some inquiry values are invalid. Check the fields and try again.";
+    case "23503": return "A selected product or assignee is no longer available. Refresh and try again.";
+    case "42501": return "Your session or permissions no longer allow this action. Sign in again.";
+    default: return "Unable to save the inquiry. Retry with the same submission key if the result is uncertain.";
+  }
+}

@@ -8,8 +8,10 @@ import { signOut } from "@/lib/auth/actions";
 const navigation = [
   { href: "/admin", label: "Overview", description: "Dashboard" },
   { href: "/admin/products", label: "Products", description: "Catalog" },
+  { href: "/admin/inquiries", label: "Inquiries", description: "Customer requests" },
   { href: "/admin/categories", label: "Categories", description: "Product groups" },
   { href: "/admin/media", label: "Media library", description: "Product images" },
+  { href: "/admin/consultants", label: "Consultants", description: "Public Zalo contacts", superAdminOnly: true },
   { href: "/admin/team", label: "Team & access", description: "Staff accounts", superAdminOnly: true },
   { href: "/admin/settings/security", label: "Account security", description: "Password & MFA" },
 ];

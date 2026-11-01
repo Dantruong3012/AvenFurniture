@@ -2,7 +2,12 @@ export function getSupabaseConfig() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const publishableKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
   if (!url || !publishableKey) {
-    throw new Error("Supabase URL and publishable key must be configured.");
+    const missing = [
+      !url && "NEXT_PUBLIC_SUPABASE_URL",
+      !publishableKey && "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+    ].filter(Boolean);
+    // Report names only: never include environment values in logs or errors.
+    throw new Error(`Missing Supabase configuration: ${missing.join(", ")}. Set these variables in the deployment's build environment and rebuild.`);
   }
   let parsed: URL;
   try { parsed = new URL(url); } catch { throw new Error("Invalid Supabase URL configuration."); }

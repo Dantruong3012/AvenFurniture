@@ -1,0 +1,68 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { requireAdmin } from "@/lib/auth/admin";
+import { allowAuthMutation } from "@/lib/auth/mutation";
+import { addAdminInquiryNote, isActiveInquiryStaff, listActiveInquiryStaff as queryActiveInquiryStaff, updateAdminInquiryAssignment, updateAdminInquiryStatus } from "@/lib/repositories/supabaseInquiryRepository";
+import { uuidPattern } from "@/lib/validation/catalog";
+import { inquiryStatuses, validateInquiryAssignment, validateInquiryNote, type InquiryStatus } from "@/lib/validation/inquiry";
+import type { AdminInquiryActionState } from "@/lib/types";
+
+export async function getActiveInquiryStaff() {
+  await requireAdmin();
+  return queryActiveInquiryStaff();
+}
+
+export async function changeInquiryStatus(_previous: AdminInquiryActionState, form: FormData): Promise<AdminInquiryActionState> {
+  const { supabase, user } = await requireAdmin();
+  if (!(await allowAuthMutation("inquiry-status", user.id, 120))) return { error: "Request denied or too many changes. Wait and retry from this site." };
+  const id = form.get("id"), status = form.get("status");
+  if (typeof id !== "string" || !uuidPattern.test(id)) return { error: "Choose a valid inquiry." };
+  if (typeof status !== "string" || !inquiryStatuses.includes(status as InquiryStatus)) return { error: "Choose a valid inquiry status." };
+  try {
+    await updateAdminInquiryStatus(supabase, id, status as InquiryStatus);
+  } catch {
+    return { error: "Unable to update this inquiry. Refresh and check that your session and the inquiry are still available." };
+  }
+  revalidatePath("/admin/inquiries");
+  return { success: "Status updated." };
+}
+
+export async function createInquiryNote(_previous: AdminInquiryActionState, form: FormData): Promise<AdminInquiryActionState> {
+  const { supabase, user } = await requireAdmin();
+  if (!(await allowAuthMutation("inquiry-note", user.id, 120))) return { error: "Request denied or too many changes. Wait and retry from this site." };
+  const id = form.get("id");
+  if (typeof id !== "string" || !uuidPattern.test(id)) return { error: "Choose a valid inquiry." };
+  let body: string;
+  try { body = validateInquiryNote(form.get("body")); }
+  catch { return { error: "Enter a note of 1–10000 characters." }; }
+  try {
+    await addAdminInquiryNote(supabase, id, body);
+  } catch {
+    return { error: "Unable to confirm the note was saved. Refresh and check the timeline before retrying." };
+  }
+  revalidatePath("/admin/inquiries");
+  return { success: "Internal note added." };
+}
+
+export async function changeInquiryAssignment(_previous: AdminInquiryActionState, form: FormData): Promise<AdminInquiryActionState> {
+  const { supabase, user } = await requireAdmin();
+  if (!(await allowAuthMutation("inquiry-assignment", user.id, 120))) return { error: "Request denied or too many changes. Wait and retry from this site." };
+  let assignment: ReturnType<typeof validateInquiryAssignment>;
+  try {
+    const raw = form.has("assignedTo") ? form.get("assignedTo") : undefined;
+    assignment = validateInquiryAssignment({ inquiryId: form.get("id"), assignedTo: raw === "" ? null : raw });
+  } catch {
+    return { error: "Choose a valid inquiry and staff member." };
+  }
+  try {
+    if (assignment.assignedTo && !(await isActiveInquiryStaff(assignment.assignedTo))) {
+      return { error: "This staff member is no longer active. Refresh and choose another staff member." };
+    }
+    await updateAdminInquiryAssignment(supabase, user.id, assignment.inquiryId, assignment.assignedTo);
+  } catch {
+    return { error: "Unable to confirm the assignment. Refresh the inquiry before retrying." };
+  }
+  revalidatePath("/admin/inquiries");
+  return { success: assignment.assignedTo ? "Staff assigned." : "Staff unassigned." };
+}

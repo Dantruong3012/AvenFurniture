@@ -1,6 +1,74 @@
+import { z } from "zod";
+import type { CollectionDefinition, CollectionProductAssociation } from "@/lib/types";
+import { resolveCollectionCatalog } from "@/lib/catalog/public";
+import type { CollectionCatalogFilters } from "@/lib/catalog/public";
+
+const slugSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(160);
+const requiredCopy = (max: number) => z.string().trim().min(1).max(max).refine((value) => !value.includes("\0"));
+
+export const collectionDefinitionSchema: z.ZodType<CollectionDefinition> = z.strictObject({
+  name: requiredCopy(120),
+  slug: slugSchema,
+  title: requiredCopy(160),
+  description: requiredCopy(500),
+  image: z.string().url().refine((value) => value.startsWith("https://")),
+  metadata: z.strictObject({
+    imageAlt: requiredCopy(200),
+    seoTitle: requiredCopy(70),
+    seoDescription: requiredCopy(160),
+  }),
+  association: z.strictObject({ kind: z.literal("category"), categorySlug: slugSchema }),
+}).refine((collection) => collection.slug === collection.association.categorySlug, {
+  message: "Collection and category slugs must match.", path: ["association", "categorySlug"],
+});
+
+export const collectionTaxonomySchema = z.array(collectionDefinitionSchema).min(1).superRefine((collections, context) => {
+  const slugs = new Set<string>();
+  for (const [index, collection] of collections.entries()) {
+    if (slugs.has(collection.slug)) context.addIssue({ code: "custom", message: "Duplicate collection slug.", path: [index, "slug"] });
+    slugs.add(collection.slug);
+  }
+});
+
+const singleText = (max: number) => z.string().trim().transform((value) => value.slice(0, max)).catch("");
+const priceSchema = z.enum(["all", "quote", "priced", "under-1000", "1000-3000", "over-3000"]);
+const sortSchema = z.enum(["featured", "newest", "name", "price-low", "price-high"]);
+
+/** Repeated URL parameters and malformed values are rejected by the individual defaults. */
+export const collectionFilterSchema: z.ZodType<CollectionCatalogFilters> = z.object({
+  collection: slugSchema.catch(""),
+  q: singleText(100),
+  category: slugSchema.catch(""),
+  material: singleText(80),
+  price: priceSchema.catch("all"),
+  sort: sortSchema.catch("featured"),
+  page: z.string().regex(/^[1-9]\d*$/).transform((value) => Math.min(10000, Number(value))).catch(1),
+  status: z.literal("published").catch("published"),
+});
+
 export type CatalogKind = "categories" | "products";
 export type CatalogState = { error?: string; fields?: Record<string, string>; values?: Record<string, string> };
 export const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const collectionSlugSchema = slugSchema.refine((slug) => resolveCollectionCatalog(slug).length === 1, "Choose an existing collection.");
+export const collectionSlugsSchema = z.array(collectionSlugSchema).max(20, "Choose at most 20 collections.").superRefine((slugs, context) => {
+  const seen = new Set<string>();
+  for (const [index, slug] of slugs.entries()) {
+    if (seen.has(slug)) context.addIssue({ code: "custom", path: [index], message: "Duplicate collection association." });
+    seen.add(slug);
+  }
+});
+export const collectionProductAssociationSchema: z.ZodType<CollectionProductAssociation> = z.strictObject({
+  productId: z.string().regex(uuidPattern, "Choose a valid product ID."),
+  collectionSlug: collectionSlugSchema,
+});
+export const collectionProductAssociationsSchema = z.array(collectionProductAssociationSchema).max(1000).superRefine((associations, context) => {
+  const seen = new Set<string>();
+  for (const [index, association] of associations.entries()) {
+    const key = `${association.productId}:${association.collectionSlug}`;
+    if (seen.has(key)) context.addIssue({ code: "custom", path: [index], message: "Duplicate collection-product association." });
+    seen.add(key);
+  }
+});
 export function suggestSlug(name: string) {
   return name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[đĐ]/g, "d")
     .toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 160).replace(/-$/, "");
@@ -37,13 +105,25 @@ export function validateCatalog(kind: CatalogKind, form: FormData) {
   if (!/^[A-Z]{3}$/.test(currency)) fields.currency = "Use a three-letter currency code (USD, VND…).";
   const seo_title = text("seo_title", 200) || null;
   const seo_description = text("seo_description", 500) || null;
-  let attributes: Record<string, string | number | boolean | null> = {};
+  let attributes: Record<string, string | number | boolean | null | string[]> = {};
   const rawAttributes = text("attributes", 10000);
   try {
     const parsed = JSON.parse(rawAttributes || "{}");
     if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") throw new Error();
     attributes = parsed;
   } catch { fields.attributes = "Enter a valid JSON object."; }
+  if (form.has("collection_associations_present")) {
+    if (form.get("collection_associations_present") !== "1") fields.collection_slugs = "Invalid collection selection.";
+    if (Object.hasOwn(attributes, "collection_slugs")) fields.attributes = "Edit collections using the collection choices.";
+    const selected = form.getAll("collection_slugs");
+    const result = collectionSlugsSchema.safeParse(selected);
+    values.collection_slugs = selected.filter((item): item is string => typeof item === "string").join(",");
+    if (result.success) attributes.collection_slugs = result.data;
+    else fields.collection_slugs = result.error.issues[0]?.message ?? "Choose valid collections.";
+  } else if (Object.hasOwn(attributes, "collection_slugs")) {
+    const result = collectionSlugsSchema.safeParse(attributes.collection_slugs);
+    if (!result.success) fields.attributes = "Collection associations must be unique, existing collection slugs.";
+  }
   for (const key of ["material", "color", "dimensions"]) {
     if (form.has(key)) {
       const value = text(key, 300);

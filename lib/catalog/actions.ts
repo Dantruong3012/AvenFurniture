@@ -46,6 +46,10 @@ async function save(kind: CatalogKind, form: FormData): Promise<CatalogState> {
     }
   } catch { return failure(catalogError()); }
   revalidatePath("/admin", "layout");
+  if (kind === "products") {
+    revalidatePath("/collections");
+    revalidatePath("/products");
+  }
   redirect(`/admin/${kind}?saved=1`);
 }
 export async function saveCategory(_previous: CatalogState, form: FormData) { return save("categories", form); }

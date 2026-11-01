@@ -1,0 +1,64 @@
+{
+  "task": "t1 (representative mock implementation)",
+  "legacy": {
+    "success": true,
+    "durationMs": 980,
+    "codex": {
+      "turns": 2,
+      "inputTokens": 5300,
+      "cachedInputTokens": 2330,
+      "uncachedInputTokens": 2970,
+      "outputTokens": 600,
+      "totalTokens": 5900,
+      "toolCalls": 4
+    },
+    "antigravity": {
+      "turns": 2,
+      "inputTokens": 8300,
+      "cachedInputTokens": 0,
+      "outputTokens": 960,
+      "totalTokens": 9260,
+      "toolCalls": 0
+    },
+    "orchestrator": {
+      "shellOutputBytes": 0,
+      "reworkRounds": 0
+    }
+  },
+  "optimized": {
+    "success": true,
+    "durationMs": 962,
+    "codex": {
+      "turns": 1,
+      "inputTokens": 3200,
+      "cachedInputTokens": 1280,
+      "uncachedInputTokens": 1920,
+      "outputTokens": 480,
+      "totalTokens": 3680,
+      "toolCalls": 3
+    },
+    "antigravity": {
+      "turns": 2,
+      "inputTokens": 8300,
+      "cachedInputTokens": 0,
+      "outputTokens": 960,
+      "totalTokens": 9260,
+      "toolCalls": 0
+    },
+    "orchestrator": {
+      "shellOutputBytes": 0,
+      "reworkRounds": 1
+    }
+  },
+  "comparison": {
+    "codexInvocationsSaved": 1,
+    "codexInvocationsPercentReduction": "50.0%",
+    "codexInputTokensSaved": 2100,
+    "codexInputTokensPercentReduction": "39.6%",
+    "codexOutputTokensSaved": 120,
+    "codexOutputTokensPercentReduction": "20.0%",
+    "codexTotalTokensSaved": 2220,
+    "codexTotalTokensPercentReduction": "37.6%",
+    "codexToolCallsSaved": 1
+  }
+}

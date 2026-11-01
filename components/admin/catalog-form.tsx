@@ -7,6 +7,8 @@ import { deleteCatalog, saveCategory, saveProduct } from "@/lib/catalog/actions"
 import { suggestSlug, type CatalogKind, type CatalogState } from "@/lib/validation/catalog";
 import type { Database } from "@/lib/supabase/database.types";
 import { MediaUploader } from "@/components/admin/media-uploader";
+import { collectionCatalog } from "@/lib/catalog/public";
+import { collectionSlugsSchema } from "@/lib/validation/catalog";
 type Category = Database["public"]["Tables"]["categories"]["Row"];
 type Asset = Database["public"]["Tables"]["media_assets"]["Row"];
 
@@ -17,7 +19,21 @@ export function CatalogForm({ kind, initial, categories = [], assets = [] }: {
   const [dirty, setDirty] = useState(false);
   // Controlled fields survive React's automatic form reset after an action
   // returns a validation error (notably <select> ignores changed defaultValue).
-  const [draft, setDraft] = useState(initial);
+  const initialAttributes = (() => { try { return JSON.parse(initial.attributes || "{}"); } catch { return {}; } })();
+  const storedSlugs = initialAttributes && typeof initialAttributes === "object" && !Array.isArray(initialAttributes)
+    ? collectionSlugsSchema.safeParse(initialAttributes.collection_slugs) : null;
+  const legacySlug = categories.find((category) => category.id === initial.category_id)?.slug;
+  const [draft, setDraft] = useState(() => {
+    const values = { ...initial };
+    if (initialAttributes && typeof initialAttributes === "object" && !Array.isArray(initialAttributes) && "collection_slugs" in initialAttributes) {
+      const otherAttributes = { ...initialAttributes };
+      delete otherAttributes.collection_slugs;
+      values.attributes = JSON.stringify(otherAttributes, null, 2);
+    }
+    return values;
+  });
+  const [selectedCollectionSlugs, setSelectedCollectionSlugs] = useState<string[]>(storedSlugs?.success ? storedSlugs.data : legacySlug && collectionCatalog.some((collection) => collection.slug === legacySlug) ? [legacySlug] : []);
+  const [collectionSelectionTouched, setCollectionSelectionTouched] = useState(false);
   const setValue = (name: string, value: string) => { setDraft((current) => ({ ...current, [name]: value })); setDirty(true); };
   const [selectedAssets, setSelectedAssets] = useState((initial.asset_ids || "").split(",").filter(Boolean));
   const [availableAssets, setAvailableAssets] = useState(assets);
@@ -67,9 +83,27 @@ export function CatalogForm({ kind, initial, categories = [], assets = [] }: {
           <p>Disabling a category also hides its products from public Supabase access.</p>
         </> : <>
           <div className="admin-form-heading"><span>02</span><div><h3>Publishing & pricing</h3><p>Choose where the product belongs and when visitors can see it.</p></div></div>
-          <div className="field-row"><label>Category<span className="field-hint">Choose the group this product belongs to. A super admin creates categories.</span><select required name="category_id" value={value("category_id")} onChange={(e) => setValue("category_id", e.target.value)} aria-invalid={!!state.fields?.category_id} aria-describedby={state.fields?.category_id ? "category_id-error" : undefined}><option value="">Choose a category</option>{categories.map((c) => <option key={c.id} value={c.id}>{c.name}{c.active ? "" : " (inactive)"}</option>)}</select>{fieldError("category_id")}</label>
+          <div className="field-row"><label>Category<span className="field-hint">Choose the group this product belongs to. A super admin creates categories.</span><select required name="category_id" value={value("category_id")} onChange={(e) => {
+            setValue("category_id", e.target.value);
+            if (!collectionSelectionTouched && (!initial.id || !storedSlugs?.success)) {
+              const slug = categories.find((category) => category.id === e.target.value)?.slug;
+              setSelectedCollectionSlugs(slug && collectionCatalog.some((collection) => collection.slug === slug) ? [slug] : []);
+            }
+          }} aria-invalid={!!state.fields?.category_id} aria-describedby={state.fields?.category_id ? "category_id-error" : undefined}><option value="">Choose a category</option>{categories.map((c) => <option key={c.id} value={c.id}>{c.name}{c.active ? "" : " (inactive)"}</option>)}</select>{fieldError("category_id")}</label>
             <label>Status<span className="field-hint">{value("status") === "published" ? "Published: visible to visitors when its category is active. Requires a main image and alt text for every image." : value("status") === "archived" ? "Archived: hidden from visitors, but kept in Admin for later use." : "Draft: saved in Admin and hidden from visitors until published."}</span><select name="status" value={value("status") || "draft"} onChange={(e) => setValue("status", e.target.value)}><option value="draft">Draft</option><option value="published">Published</option><option value="archived">Archived</option></select>{fieldError("status")}</label></div>
           {!categories.length && <p role="status">A super admin must create a category before you can save products.</p>}
+          <fieldset aria-describedby={state.fields?.collection_slugs ? "collection_slugs-error" : undefined}>
+            <legend>Collections</legend><p className="field-hint">Choose the collections associated with this product.</p>
+            <input type="hidden" name="collection_associations_present" value="1"/>
+            {collectionCatalog.map((collection) => <label className="check-label" key={collection.slug}>
+              <input type="checkbox" name="collection_slugs" value={collection.slug} checked={selectedCollectionSlugs.includes(collection.slug)} onChange={(event) => {
+                setSelectedCollectionSlugs((current) => event.target.checked ? [...current, collection.slug] : current.filter((slug) => slug !== collection.slug));
+                setCollectionSelectionTouched(true);
+                setDirty(true);
+              }}/>{collection.name}
+            </label>)}
+            {fieldError("collection_slugs")}
+          </fieldset>
           <div className="field-row">{input("price", "Price (blank = request a quote)", { type: "number", step: "0.01", min: "0" }, "Leave empty if visitors should request a quote instead of seeing a fixed price.")}{input("currency", "Currency", { required: true, maxLength: 3 }, "Three-letter currency code, such as USD or VND.")}</div>
           <div className="admin-form-heading"><span>03</span><div><h3>Product specifications</h3><p>Add useful details so visitors can understand the product.</p></div></div>
           <label className="check-label"><input name="featured" type="checkbox" checked={value("featured") === "on"} onChange={(e) => setValue("featured", e.target.checked ? "on" : "")}/> Featured product</label>

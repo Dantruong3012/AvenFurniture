@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
@@ -20,7 +21,7 @@ test("MVP migration and RLS on isolated PostgreSQL", async (t) => {
     create role authenticated nologin;
     create role service_role nologin bypassrls;
     create schema auth;
-    create table auth.users(id uuid primary key);
+    create table auth.users(id uuid primary key, email text);
     create table auth.sessions(id uuid primary key, user_id uuid not null references auth.users(id),
       created_at timestamptz not null default now(), not_after timestamptz);
     create function auth.jwt() returns jsonb language sql stable as
@@ -39,7 +40,7 @@ test("MVP migration and RLS on isolated PostgreSQL", async (t) => {
   await db.exec("commit");
   const sessionIds = Object.fromEntries(Object.entries(ids).map(([name, id]) => [name, id.replace("00000000-", "10000000-")]));
   for (const [name, id] of Object.entries(ids)) {
-    await db.query("insert into auth.users values ($1)", [id]);
+    await db.query("insert into auth.users values ($1,$2)", [id, `${name}@example.com`]);
     await db.query("insert into auth.sessions(id,user_id) values ($1,$2)", [sessionIds[name], id]);
   }
   await db.query(`insert into public.admin_profiles(user_id, display_name, role, active) values
@@ -55,6 +56,8 @@ test("MVP migration and RLS on isolated PostgreSQL", async (t) => {
   const draft = (await db.query(`insert into public.products(category_id,name,slug) values ($1,'Draft','draft') returning id`, [category])).rows[0].id;
   const inquiry = (await db.query(`insert into public.inquiries(idempotency_key,contact_name,contact_phone,original_submission,source)
     values (gen_random_uuid(),'Customer','0901234567','{"name":"Customer"}','contact') returning id`)).rows[0].id;
+  const changeInquiry = (await db.query(`insert into public.inquiries(idempotency_key,contact_name,contact_phone,contact_email,original_submission,source)
+    values (gen_random_uuid(),'Email Customer','0901234567','customer@example.com','{}','contact') returning id`)).rows[0].id;
   await db.query(`insert into public.inquiry_items(inquiry_id,product_id,product_name,product_slug,currency,quantity)
     values ($1,$2,'Chair','chair','USD',1)`, [inquiry, published]);
   await db.query(`insert into public.consultant_profiles(user_id,public_name,zalo_phone,enabled)
@@ -70,15 +73,50 @@ test("MVP migration and RLS on isolated PostgreSQL", async (t) => {
   const rejects = (sql, params = [], code = "42501") => assert.rejects(db.query(sql, params), (error) =>
     code === "23503" ? ["23503", "23001"].includes(error.code) : error.code === code);
 
-  await t.test("all twelve public tables have RLS enabled", async () => {
+  await t.test("all sixteen public tables have RLS enabled", async () => {
     const { rows } = await db.query("select relname, relrowsecurity from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r'");
-    assert.equal(rows.length, 12);
+    assert.equal(rows.length, 16);
     assert.ok(rows.every((row) => row.relrowsecurity));
+  });
+  await t.test("customer quote carts are private, published-only and session-bound", async () => {
+    await as("anon", null, () => rejects("select * from public.customer_cart_items"));
+    await as("authenticated", ids.outsider, async () => {
+      await db.query("insert into public.customer_cart_items(user_id,product_id,quantity) values ($1,$2,2)", [ids.outsider, published]);
+      assert.deepEqual((await db.query("select product_id,quantity from public.customer_cart_items")).rows, [{ product_id: published, quantity: 2 }]);
+      assert.equal((await db.query("update public.customer_cart_items set quantity=999 returning quantity")).rows[0].quantity, 999);
+      await rejects("insert into public.customer_cart_items(user_id,product_id,quantity) values ($1,$2,1)", [ids.admin, published]);
+      await rejects("insert into public.customer_cart_items(user_id,product_id,quantity) values ($1,$2,1)", [ids.outsider, draft]);
+      await rejects("update public.customer_cart_items set user_id=$1 returning user_id", [ids.admin]);
+    });
+    await as("authenticated", ids.admin, async () => assert.equal((await db.query("select * from public.customer_cart_items")).rows.length, 0));
+    await as("authenticated", ids.outsider, async () => assert.equal((await db.query("select * from public.customer_cart_items")).rows.length, 0), sessionIds.admin);
+  });
+  await t.test("newsletter roster requires a current staff session", async () => {
+    await as("service_role", null, () => db.query(
+      "select public.subscribe_newsletter($1,$2,$3,$4,$5,$6)",
+      ["reader@example.com", "newsletter_form", "2026-10", "a".repeat(64), null, null],
+    ));
+    for (const [role, id] of [["anon", null], ["authenticated", ids.outsider], ["authenticated", ids.blocked]]) {
+      await as(role, id, async () => {
+        if (role === "anon") await rejects("select email from public.newsletter_subscribers");
+        else assert.equal((await db.query("select email from public.newsletter_subscribers")).rows.length, 0);
+        await rejects("update public.newsletter_subscribers set status='unsubscribed'");
+      });
+    }
+    await as("authenticated", ids.staff, async () => {
+      assert.deepEqual((await db.query("select email from public.newsletter_subscribers")).rows, [{ email: "reader@example.com" }]);
+    });
+    await db.query("delete from auth.sessions where id=$1", [sessionIds.staff]);
+    await as("authenticated", ids.staff, async () => {
+      assert.equal((await db.query("select email from public.newsletter_subscribers")).rows.length, 0);
+    });
+    await db.query("insert into auth.sessions(id,user_id) values ($1,$2)", [sessionIds.staff, ids.staff]);
+    await db.query("delete from public.newsletter_subscribers where email='reader@example.com'");
   });
   await t.test("anonymous reads published catalog and media only; private tables/mutations denied", () => as("anon", null, async () => {
     assert.deepEqual((await db.query("select id from public.products")).rows, [{ id: published }]);
     assert.equal((await db.query("select * from public.media_assets")).rows.length, 1);
-    for (const table of ["admin_profiles", "inquiries", "inquiry_items", "inquiry_notes", "audit_logs", "email_outbox", "consultant_profiles"]) {
+    for (const table of ["admin_profiles", "inquiries", "inquiry_items", "inquiry_notes", "audit_logs", "email_outbox", "consultant_profiles", "newsletter_subscribers"]) {
       await rejects(`select * from public.${table}`);
     }
     await rejects("update public.products set name='Hacked'");
@@ -99,7 +137,8 @@ test("MVP migration and RLS on isolated PostgreSQL", async (t) => {
   await t.test("staff can edit others' products/inquiries, but cannot elevate roles/manage categories", () => as("authenticated", ids.staff, async () => {
     assert.equal((await db.query("select * from public.products")).rows.length, 2);
     assert.equal((await db.query("update public.products set name='Updated' where id=$1 returning version", [draft])).rows[0].version, 2);
-    assert.equal((await db.query("update public.inquiries set status='consulting',contact_name='Corrected' where id=$1 returning id", [inquiry])).rows.length, 1);
+    await rejects("update public.inquiries set status='consulting' where id=$1", [inquiry]);
+    assert.equal((await db.query("update public.inquiries set contact_name='Corrected' where id=$1 returning id", [inquiry])).rows.length, 1);
     assert.equal((await db.query("update public.admin_profiles set role='super_admin' where user_id=$1 returning user_id", [ids.staff])).rows.length, 0);
     assert.equal((await db.query("update public.categories set name='Hacked' returning id")).rows.length, 0);
     assert.equal((await db.query("update public.consultant_profiles set enabled=false returning user_id")).rows.length, 0);
@@ -113,6 +152,43 @@ test("MVP migration and RLS on isolated PostgreSQL", async (t) => {
     assert.equal((await db.query("insert into public.inquiry_notes(inquiry_id,body) values ($1,'Follow up') returning id", [inquiry])).rows.length, 1);
     assert.equal((await db.query("select * from public.audit_logs")).rows.length, 0);
   }));
+  await t.test("change RPCs atomically queue unique events and audit assignment", async () => {
+    const rows = () => db.query("select event_type,payload,idempotency_key,event_id from public.email_outbox where inquiry_id=$1 order by created_at,id", [changeInquiry]);
+    await as("authenticated", ids.staff, async () => {
+      await db.query("select public.change_inquiry_status($1,'consulting')", [changeInquiry]);
+      await db.query("select public.change_inquiry_status($1,'consulting')", [changeInquiry]);
+      await db.query("select public.change_inquiry_assignment($1,$2,$3)", [changeInquiry, ids.staff, `http://localhost:3000/admin/inquiries?inquiry=${changeInquiry}`]);
+      await db.query("select public.change_inquiry_assignment($1,$2,$3)", [changeInquiry, ids.staff, `http://localhost:3000/admin/inquiries?inquiry=${changeInquiry}`]);
+    });
+    const events = (await rows()).rows;
+    assert.deepEqual(events.map((event) => event.event_type).sort(), ["inquiry.assigned", "inquiry.status_changed"]);
+    assert.equal(new Set(events.map((event) => event.idempotency_key)).size, 2);
+    for (const event of events) {
+      assert.equal(event.idempotency_key,
+        createHash("sha256").update(`email:v1\0${event.event_type}\0${event.event_id}`).digest("hex"));
+    }
+    assert.equal(events.find((event) => event.event_type === "inquiry.assigned").payload.data.to, "staff@example.com");
+    assert.equal(events.find((event) => event.event_type === "inquiry.status_changed").payload.data.status, "consulting");
+    const audits = (await db.query("select action,actor_id from public.audit_logs where entity_id=$1", [changeInquiry])).rows;
+    assert.deepEqual(audits, [{ action: "inquiry_assigned", actor_id: ids.staff }]);
+    await db.exec(`create function public.fail_change_outbox() returns trigger language plpgsql as $$ begin raise exception 'outbox failed'; end $$;
+      create trigger fail_change_outbox before insert on public.email_outbox for each row execute function public.fail_change_outbox();`);
+    try {
+      await assert.rejects(as("authenticated", ids.staff, () => db.query("select public.change_inquiry_status($1,'completed')", [changeInquiry])), /outbox failed/);
+      assert.equal((await db.query("select status from public.inquiries where id=$1", [changeInquiry])).rows[0].status, "consulting");
+      assert.equal((await rows()).rows.length, 2);
+    } finally { await db.exec("drop trigger fail_change_outbox on public.email_outbox; drop function public.fail_change_outbox()"); }
+    await as("authenticated", ids.staff, () => db.query("select public.change_inquiry_assignment($1,null,null)", [changeInquiry]));
+    const auditCount = (await db.query("select count(*)::int count from public.audit_logs where entity_id=$1", [changeInquiry])).rows[0].count;
+    await db.exec(`create function public.fail_assignment_outbox() returns trigger language plpgsql as $$ begin raise exception 'assignment outbox failed'; end $$;
+      create trigger fail_assignment_outbox before insert on public.email_outbox for each row execute function public.fail_assignment_outbox();`);
+    try {
+      await assert.rejects(as("authenticated", ids.staff, () => db.query("select public.change_inquiry_assignment($1,$2,$3)",
+        [changeInquiry, ids.staff, `http://localhost:3000/admin/inquiries?inquiry=${changeInquiry}`])), /assignment outbox failed/);
+      assert.equal((await db.query("select assignee_id from public.inquiries where id=$1", [changeInquiry])).rows[0].assignee_id, null);
+      assert.equal((await db.query("select count(*)::int count from public.audit_logs where entity_id=$1", [changeInquiry])).rows[0].count, auditCount);
+    } finally { await db.exec("drop trigger fail_assignment_outbox on public.email_outbox; drop function public.fail_assignment_outbox()"); }
+  });
   await t.test("account lock invalidates staff access for the same JWT subject", async () => {
     await db.query("update public.admin_profiles set active=false where user_id=$1", [ids.staff]);
     await as("authenticated", ids.staff, async () => {
@@ -209,16 +285,23 @@ test("MVP migration and RLS on isolated PostgreSQL", async (t) => {
     await as("authenticated", ids.staff, async () => assert.equal(await context(), null), secondSession);
     await db.query("insert into auth.sessions(id,user_id) values ($1,$2)", [sessionIds.staff, ids.staff]);
   });
-  await t.test("role changes are live; unlocking never resurrects pre-lock sessions", async () => {
+  await t.test("role and status changes revoke old sessions; fresh sign-in uses the current role", async () => {
+    const promotedSession = "20000000-0000-0000-0000-000000000012";
+    const demotedSession = "20000000-0000-0000-0000-000000000013";
     await db.query("update public.admin_profiles set role='super_admin' where user_id=$1", [ids.staff]);
-    await as("authenticated", ids.staff, async () => assert.equal((await context()).role, "super_admin"));
+    await as("authenticated", ids.staff, async () => assert.equal(await context(), null));
+    await db.query("insert into auth.sessions(id,user_id) values ($1,$2)", [promotedSession, ids.staff]);
+    await as("authenticated", ids.staff, async () => assert.equal((await context()).role, "super_admin"), promotedSession);
     await db.query("update public.admin_profiles set role='staff' where user_id=$1", [ids.staff]);
-    await as("authenticated", ids.staff, async () => assert.equal((await context()).role, "staff"));
+    await as("authenticated", ids.staff, async () => assert.equal(await context(), null), promotedSession);
+    await db.query("insert into auth.sessions(id,user_id) values ($1,$2)", [demotedSession, ids.staff]);
+    await as("authenticated", ids.staff, async () => assert.equal((await context()).role, "staff"), demotedSession);
     await db.query("update public.admin_profiles set active=false where user_id=$1", [ids.staff]);
-    await as("authenticated", ids.staff, async () => assert.equal(await context(), null));
+    await as("authenticated", ids.staff, async () => assert.equal(await context(), null), demotedSession);
     await db.query("update public.admin_profiles set active=true where user_id=$1", [ids.staff]);
-    await as("authenticated", ids.staff, async () => assert.equal(await context(), null));
-    await renewStaffSession();
+    await as("authenticated", ids.staff, async () => assert.equal(await context(), null), demotedSession);
+    await db.query("delete from auth.sessions where id=$1", [sessionIds.staff]);
+    await db.query("insert into auth.sessions(id,user_id) values ($1,$2)", [sessionIds.staff, ids.staff]);
     await as("authenticated", ids.staff, async () => assert.equal((await context()).role, "staff"));
   });
   await t.test("archived catalog hides images and unused media from anonymous users", async () => {

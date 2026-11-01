@@ -19,6 +19,8 @@ export type Database = {
           active: boolean
           created_at: string
           display_name: string
+          invite_email: string | null
+          invited_at: string | null
           role: string
           sessions_revoked_before: string | null
           updated_at: string
@@ -28,6 +30,8 @@ export type Database = {
           active?: boolean
           created_at?: string
           display_name: string
+          invite_email?: string | null
+          invited_at?: string | null
           role: string
           sessions_revoked_before?: string | null
           updated_at?: string
@@ -37,6 +41,8 @@ export type Database = {
           active?: boolean
           created_at?: string
           display_name?: string
+          invite_email?: string | null
+          invited_at?: string | null
           role?: string
           sessions_revoked_before?: string | null
           updated_at?: string
@@ -153,12 +159,16 @@ export type Database = {
           attempts: number
           created_at: string
           event_id: string
+          event_type: string | null
           id: string
+          idempotency_key: string | null
           inquiry_id: string
           last_error: string | null
           locked_until: string | null
           next_attempt_at: string
+          payload: Json | null
           provider_message_id: string | null
+          schema_version: number | null
           status: string
           updated_at: string
         }
@@ -166,12 +176,16 @@ export type Database = {
           attempts?: number
           created_at?: string
           event_id?: string
+          event_type?: string | null
           id?: string
+          idempotency_key?: string | null
           inquiry_id: string
           last_error?: string | null
           locked_until?: string | null
           next_attempt_at?: string
+          payload?: Json | null
           provider_message_id?: string | null
+          schema_version?: number | null
           status?: string
           updated_at?: string
         }
@@ -179,12 +193,16 @@ export type Database = {
           attempts?: number
           created_at?: string
           event_id?: string
+          event_type?: string | null
           id?: string
+          idempotency_key?: string | null
           inquiry_id?: string
           last_error?: string | null
           locked_until?: string | null
           next_attempt_at?: string
+          payload?: Json | null
           provider_message_id?: string | null
+          schema_version?: number | null
           status?: string
           updated_at?: string
         }
@@ -442,6 +460,51 @@ export type Database = {
           },
         ]
       }
+      newsletter_subscribers: {
+        Row: {
+          id: string
+          email: string
+          status: "pending" | "active" | "unsubscribed"
+          consent_timestamp: string | null
+          consent_source: string | null
+          consent_version: string | null
+          consent_ip_hash: string | null
+          consent_user_agent_hash: string | null
+          unsubscribe_token: string
+          unsubscribed_at: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          email: string
+          status?: "pending" | "active" | "unsubscribed"
+          consent_timestamp?: string | null
+          consent_source?: string | null
+          consent_version?: string | null
+          consent_ip_hash?: string | null
+          consent_user_agent_hash?: string | null
+          unsubscribe_token: string
+          unsubscribed_at?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          email?: string
+          status?: "pending" | "active" | "unsubscribed"
+          consent_timestamp?: string | null
+          consent_source?: string | null
+          consent_version?: string | null
+          consent_ip_hash?: string | null
+          consent_user_agent_hash?: string | null
+          unsubscribe_token?: string
+          unsubscribed_at?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       products: {
         Row: {
           attributes: Json
@@ -535,6 +598,50 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      cleanup_newsletter_retention: {
+        Args: Record<PropertyKey, never>
+        Returns: number
+      }
+      subscribe_newsletter: {
+        Args: {
+          p_email: string
+          p_source: string
+          p_version: string
+          p_token_digest: string
+          p_ip_hash: string | null
+          p_user_agent_hash: string | null
+        }
+        Returns: undefined
+      }
+      unsubscribe_newsletter: {
+        Args: { p_token: string }
+        Returns: boolean
+      }
+      change_inquiry_assignment: {
+        Args: { p_id: string; p_assignee_id: string | null; p_admin_url: string | null }
+        Returns: Database["public"]["Tables"]["inquiries"]["Row"]
+      }
+      change_inquiry_status: {
+        Args: { p_id: string; p_status: string | null; p_assignee_id?: string | null; p_change_assignee?: boolean; p_admin_url?: string | null }
+        Returns: Database["public"]["Tables"]["inquiries"]["Row"]
+      }
+      submit_customer_inquiry: {
+        Args: {
+          p_idempotency_key: string
+          p_contact_name: string
+          p_contact_phone: string
+          p_contact_email: string | null
+          p_message: string | null
+          p_source: string
+          p_original_submission: Json
+          p_items?: Json | null
+        }
+        Returns: {
+          id: string
+          reference: number
+          is_duplicate: boolean
+        }[]
+      }
       save_catalog_product: {
         // Remote generated signature, with nullable create arguments corrected:
         // PostgreSQL accepts NULL for a new product; generator omits argument nullability.
@@ -685,6 +792,6 @@ export const Constants = {
   },
 } as const
 
-export type AdminRole = "super_admin" | "staff";
+export type AdminRole = "super_admin" | "admin" | "editor" | "staff";
 export type AdminProfile = Database["public"]["Tables"]["admin_profiles"]["Row"];
 export type ProductRow = Database["public"]["Tables"]["products"]["Row"];
